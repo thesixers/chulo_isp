@@ -13,15 +13,31 @@ async function seed() {
         console.log("🌱 Truncating old plans...");
         await db.query('TRUNCATE TABLE plans RESTART IDENTITY CASCADE;');
 
-        console.log("🌱 Inserting standard unlimited plans...");
+        console.log("🌱 Inserting Chulo ISP plans...");
         await db.query(`
-            INSERT INTO plans (name, price, duration_days, data_limit_mb, speed_limit) 
-            VALUES 
-            ('Daily', 500, 1, 0, 'Unlimited'),
-            ('Weekly', 3000, 7, 0, 'Unlimited'),
-            ('Monthly', 8000, 30, 0, 'Unlimited')
+            INSERT INTO plans (name, price, duration_days, mikrotik_profile) VALUES
+            -- Single device (7/7_Mbps_1Users)
+            ('1 Month - Single Device',  8000, 30, '7/7_Mbps_1Users'),
+            ('2 Weeks - Single Device',  4400, 14, '7/7_Mbps_1Users'),
+            ('1 Week - Single Device',   2200,  7, '7/7_Mbps_1Users'),
+            ('3 Days - Single Device',   1200,  3, '7/7_Mbps_1Users'),
+            ('1 Day - Single Device',     700,  1, '7/7_Mbps_1Users'),
+
+            -- Two devices (7/7_Mbps_2Users)
+            ('1 Month - Two Devices',   14000, 30, '7/7_Mbps_2Users'),
+            ('2 Weeks - Two Devices',    8000, 14, '7/7_Mbps_2Users'),
+            ('1 Week - Two Devices',     4000,  7, '7/7_Mbps_2Users'),
+            ('3 Days - Two Devices',     2200,  3, '7/7_Mbps_2Users'),
+            ('1 Day - Two Devices',      1300,  1, '7/7_Mbps_2Users'),
+
+            -- Three devices (for three users)
+            ('1 Month - Three Devices', 21000, 30, 'for three users'),
+            ('2 Weeks - Three Devices', 12000, 14, 'for three users'),
+            ('1 Week - Three Devices',   6000,  7, 'for three users'),
+            ('3 Days - Three Devices',   3300,  3, 'for three users'),
+            ('1 Day - Three Devices',    2000,  1, 'for three users')
         `);
-        
+
         console.log("✅ Plans seeded successfully!");
     } catch (e) {
         console.error("❌ Error seeding database:", e);

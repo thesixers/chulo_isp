@@ -12,8 +12,18 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-    CREATE TYPE session_state AS ENUM ('start', 'awaiting_plan_selection', 'awaiting_payment');
+    CREATE TYPE session_state AS ENUM (
+        'start',
+        'awaiting_service_selection',
+        'awaiting_plan_selection',
+        'awaiting_payment',
+        'awaiting_support_message'
+    );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Add new session states to existing DBs (safe — IF NOT EXISTS)
+DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_service_selection'; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_support_message'; EXCEPTION WHEN others THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -31,8 +41,12 @@ CREATE TABLE IF NOT EXISTS plans (
     price INTEGER,
     duration_days INTEGER,
     data_limit_mb INTEGER,
-    speed_limit VARCHAR(100)
+    speed_limit VARCHAR(100),
+    mikrotik_profile VARCHAR(100) -- MikroTik hotspot profile name (e.g. '7/7_Mbps_1Users')
 );
+
+-- Add mikrotik_profile to existing plans table
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS mikrotik_profile VARCHAR(100);
 
 CREATE TABLE IF NOT EXISTS payments (
     id SERIAL PRIMARY KEY,
@@ -59,9 +73,13 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE TABLE IF NOT EXISTS whatsapp_sessions (
     phone VARCHAR(200) PRIMARY KEY,
     state session_state DEFAULT 'start',
-    plan_id INTEGER REFERENCES plans(id), -- Tracks which plan the user selected
+    plan_id INTEGER REFERENCES plans(id),
+    remote_jid VARCHAR(100),              -- Exact Baileys JID (may be @lid format, not @s.whatsapp.net)
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Add remote_jid to existing sessions table
+ALTER TABLE whatsapp_sessions ADD COLUMN IF NOT EXISTS remote_jid VARCHAR(100);
 
 -- =============================================================================
 -- MIGRATION SCRIPT

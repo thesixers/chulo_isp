@@ -1,38 +1,30 @@
 import { createDynamicVirtualAccount } from './flutterwave.js';
 import { fulfillPayment } from './fulfillPayment.js';
+import { provisionHotspotUser } from './mikrotik.js';
 
 // ---------------------------------------------------------
-// DATABASE HELPER FUNCTIONS
+// DATABASE HELPERS
 // ---------------------------------------------------------
 
-/**
- * Ensures the user row exists in the DB.
- * Does NOT call Flutterwave — FLW customer creation is deferred to the 'hi' handler.
- */
 async function upsertUser(db, phone) {
     let res = await db.query('SELECT * FROM users WHERE phone = $1', [phone]);
-
     if (res.rows.length === 0) {
-        res = await db.query(
-            `INSERT INTO users (phone) VALUES ($1) RETURNING *`,
-            [phone]
-        );
+        res = await db.query(`INSERT INTO users (phone) VALUES ($1) RETURNING *`, [phone]);
     } else {
         res = await db.query(
             `UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE phone = $1 RETURNING *`,
             [phone]
         );
     }
-
     return res.rows[0];
 }
 
 async function getSession(db, phone) {
     const res = await db.query(
-        'SELECT state, plan_id FROM whatsapp_sessions WHERE phone = $1',
+        'SELECT state, plan_id, remote_jid FROM whatsapp_sessions WHERE phone = $1',
         [phone]
     );
-    return res.rows.length > 0 ? res.rows[0] : { state: 'start', plan_id: null };
+    return res.rows.length > 0 ? res.rows[0] : { state: 'start', plan_id: null, remote_jid: null };
 }
 
 async function updateSession(db, phone, state, planId = null, remoteJid = null) {
@@ -40,59 +32,338 @@ async function updateSession(db, phone, state, planId = null, remoteJid = null) 
         INSERT INTO whatsapp_sessions (phone, state, plan_id, remote_jid)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (phone) DO UPDATE
-        SET state      = EXCLUDED.state,
-            plan_id    = COALESCE(EXCLUDED.plan_id, whatsapp_sessions.plan_id),
-            remote_jid = COALESCE(EXCLUDED.remote_jid, whatsapp_sessions.remote_jid),
+        SET state        = EXCLUDED.state,
+            plan_id      = COALESCE(EXCLUDED.plan_id, whatsapp_sessions.plan_id),
+            remote_jid   = COALESCE(EXCLUDED.remote_jid, whatsapp_sessions.remote_jid),
             last_updated = CURRENT_TIMESTAMP
     `, [phone, state, planId, remoteJid]);
 }
 
 async function getPlan(db, id) {
-    const res = await db.query('SELECT id, name, price FROM plans WHERE id = $1', [id]);
+    const res = await db.query(
+        'SELECT id, name, price, duration_days, mikrotik_profile FROM plans WHERE id = $1',
+        [id]
+    );
     return res.rows.length > 0 ? res.rows[0] : null;
 }
 
 async function getAllPlans(db) {
-    const res = await db.query('SELECT id, name, price FROM plans ORDER BY id ASC');
+    const res = await db.query(
+        'SELECT id, name, price, duration_days, mikrotik_profile FROM plans ORDER BY mikrotik_profile, duration_days DESC'
+    );
     return res.rows;
 }
+
+async function getActiveSubscription(db, userId) {
+    const res = await db.query(`
+        SELECT s.*, p.name AS plan_name, p.mikrotik_profile
+        FROM subscriptions s
+        JOIN plans p ON p.id = s.plan_id
+        WHERE s.user_id = $1 AND s.status = 'active' AND s.expiry_time > CURRENT_TIMESTAMP
+        ORDER BY s.expiry_time DESC LIMIT 1
+    `, [userId]);
+    return res.rows.length > 0 ? res.rows[0] : null;
+}
+
+async function getSubscriptionHistory(db, userId) {
+    const res = await db.query(`
+        SELECT s.status, s.start_time, s.expiry_time, p.name AS plan_name
+        FROM subscriptions s
+        JOIN plans p ON p.id = s.plan_id
+        WHERE s.user_id = $1
+        ORDER BY s.start_time DESC LIMIT 6
+    `, [userId]);
+    return res.rows;
+}
+
+async function getPaymentHistory(db, userId) {
+    const res = await db.query(`
+        SELECT p.amount, p.status, p.paid_at, p.created_at, pl.name AS plan_name
+        FROM payments p
+        LEFT JOIN whatsapp_sessions ws ON ws.phone = (
+            SELECT phone FROM users WHERE id = $1
+        )
+        LEFT JOIN plans pl ON pl.id = ws.plan_id
+        WHERE p.user_id = $1
+        ORDER BY p.created_at DESC LIMIT 6
+    `, [userId]);
+    return res.rows;
+}
+
+// ---------------------------------------------------------
+// MESSAGE BUILDERS
+// ---------------------------------------------------------
+
+function buildWelcomeMessage() {
+    return (
+        `👋 *Welcome to Chulo ISP!*\n` +
+        `Your trusted Starlink internet provider.\n\n` +
+        `How can we help you today?\n\n` +
+        `1️⃣  📡 Buy a Data Plan\n` +
+        `2️⃣  🔑 Reset Hotspot Password\n` +
+        `3️⃣  📋 Check My Subscription\n` +
+        `4️⃣  🕓 Subscription History\n` +
+        `5️⃣  💳 Payment History\n` +
+        `6️⃣  📞 Contact Support\n\n` +
+        `Reply with a number (1–6).`
+    );
+}
+
+function buildPlanMenu(plans) {
+    const tiers = [
+        { label: '📱 *Single Device*',     profile: '7/7_Mbps_1Users' },
+        { label: '📱📱 *Two Devices*',     profile: '7/7_Mbps_2Users' },
+        { label: '📱📱📱 *Three Devices*', profile: 'for three users'  },
+    ];
+
+    let text = `📡 *Choose a Data Plan*\n`;
+    for (const tier of tiers) {
+        const tierPlans = plans.filter(p => p.mikrotik_profile === tier.profile);
+        if (!tierPlans.length) continue;
+        text += `\n${tier.label}\n`;
+        text += tierPlans.map(p =>
+            `  ${p.id}. ${p.name.split(' - ')[0]} — ₦${Number(p.price).toLocaleString()}`
+        ).join('\n');
+        text += '\n';
+    }
+    text += `\nReply with the plan number, or *0* to go back.`;
+    return text;
+}
+
+function fmt(date) {
+    return new Date(date).toLocaleDateString('en-GB', {
+        day: '2-digit', month: 'short', year: 'numeric',
+    });
+}
+
+// ---------------------------------------------------------
+// MAIN HANDLER
 // ---------------------------------------------------------
 
 export async function handleMessage(sock, from, text, db) {
     if (!text) return;
 
-    const message = text.trim();
-    const messageLower = message.toLowerCase();
-    const phone = from.split('@')[0];
+    const message  = text.trim();
+    const msgLower = message.toLowerCase();
+    const phone    = from.split('@')[0];
 
-    const user = await upsertUser(db, phone);
+    const user    = await upsertUser(db, phone);
     const session = await getSession(db, phone);
 
-    // Global reset — "hi" or "hello" always brings up the plan menu
-    if (messageLower === 'hi' || messageLower === 'hello') {
-        // Store the exact 'from' JID so fulfillPayment can send proactively
-        await updateSession(db, phone, 'awaiting_plan_selection', null, from);
-
-        const plans = await getAllPlans(db);
-        let planText = plans.map(p => `${p.id}. ${p.name} Plan - ₦${p.price}`).join('\n');
-        if (!planText) planText = 'No active plans available at the moment.';
-
-        await sock.sendMessage(from, {
-            text: `Welcome to Chulo ISP! 🚀\n\nPlease select a data plan:\n${planText}\n\nReply with the option number.`,
-        });
+    // Universal reset — hi / hello / menu / 0
+    if (['hi', 'hello', 'menu', '0'].includes(msgLower)) {
+        await updateSession(db, phone, 'awaiting_service_selection', null, from);
+        await sock.sendMessage(from, { text: buildWelcomeMessage() });
         return;
     }
 
     switch (session.state) {
 
-        // ------------------------------------------------------------------
-        // STEP 1: User picks a plan → generate a dynamic virtual account
-        // ------------------------------------------------------------------
+        // ──────────────────────────────────────────────────────────────────
+        // MAIN MENU
+        // ──────────────────────────────────────────────────────────────────
+        case 'awaiting_service_selection': {
+            switch (message) {
+
+                // ── 1. Buy a Data Plan ──────────────────────────────────
+                case '1': {
+                    await updateSession(db, phone, 'awaiting_plan_selection', null, from);
+                    const plans = await getAllPlans(db);
+                    await sock.sendMessage(from, { text: buildPlanMenu(plans) });
+                    break;
+                }
+
+                // ── 2. Reset Hotspot Password ───────────────────────────
+                case '2': {
+                    const sub = await getActiveSubscription(db, user.id);
+                    if (!sub) {
+                        await sock.sendMessage(from, {
+                            text:
+                                `❌ *No Active Subscription*\n\n` +
+                                `You need an active plan to reset your password.\n\n` +
+                                `Reply *1* to buy a plan or *HI* for the main menu.`,
+                        });
+                        break;
+                    }
+
+                    await sock.sendMessage(from, {
+                        text: `🔑 *Resetting your hotspot password...*\n\nThis takes a moment, please wait.`,
+                    });
+
+                    try {
+                        const newPin = await provisionHotspotUser(phone, sub.mikrotik_profile);
+                        await sock.sendMessage(from, {
+                            text:
+                                `✅ *Password Reset Successful!*\n\n` +
+                                `🌐 *Your New Login Details*\n` +
+                                `Username: \`${phone}\`\n` +
+                                `Password: \`${newPin}\`\n\n` +
+                                `Connect at: *http://hotspot.chulo*\n\n` +
+                                `Reply *HI* for the main menu.`,
+                        });
+                    } catch (err) {
+                        console.error('Password reset failed:', err.message);
+                        await sock.sendMessage(from, {
+                            text:
+                                `⚙️ We're having trouble resetting your password right now.\n\n` +
+                                `Please contact support (reply *6*) or try again later.\n\n` +
+                                `Reply *HI* for the main menu.`,
+                        });
+                    }
+                    await updateSession(db, phone, 'start');
+                    break;
+                }
+
+                // ── 3. Check My Subscription ────────────────────────────
+                case '3': {
+                    const sub = await getActiveSubscription(db, user.id);
+                    if (!sub) {
+                        await sock.sendMessage(from, {
+                            text:
+                                `📋 *No Active Subscription*\n\n` +
+                                `You currently have no active data plan.\n\n` +
+                                `Reply *1* to buy a plan or *HI* for the main menu.`,
+                        });
+                    } else {
+                        const expiry    = new Date(sub.expiry_time);
+                        const daysLeft  = Math.ceil((expiry - new Date()) / (1000 * 60 * 60 * 24));
+                        const hoursLeft = Math.ceil((expiry - new Date()) / (1000 * 60 * 60));
+                        const timeLeft  = daysLeft > 1
+                            ? `${daysLeft} days`
+                            : `${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''}`;
+
+                        const statusIcon = daysLeft <= 2 ? '⚠️' : '✅';
+
+                        await sock.sendMessage(from, {
+                            text:
+                                `📋 *Your Active Subscription*\n\n` +
+                                `📡 Plan: *${sub.plan_name}*\n` +
+                                `📅 Started: *${fmt(sub.start_time)}*\n` +
+                                `🔚 Expires: *${fmt(sub.expiry_time)}*\n` +
+                                `${statusIcon} Time left: *${timeLeft}*\n\n` +
+                                (daysLeft <= 2
+                                    ? `⚠️ Your plan is expiring soon! Reply *1* to renew.\n\n`
+                                    : '') +
+                                `Reply *HI* for the main menu.`,
+                        });
+                    }
+                    await updateSession(db, phone, 'start');
+                    break;
+                }
+
+                // ── 4. Subscription History ─────────────────────────────
+                case '4': {
+                    const history = await getSubscriptionHistory(db, user.id);
+                    if (!history.length) {
+                        await sock.sendMessage(from, {
+                            text:
+                                `🕓 *Subscription History*\n\n` +
+                                `You have no subscription history yet.\n\n` +
+                                `Reply *1* to buy your first plan or *HI* for the main menu.`,
+                        });
+                    } else {
+                        const lines = history.map((s, i) => {
+                            const statusEmoji = s.status === 'active' ? '🟢' : '🔴';
+                            return (
+                                `${i + 1}. ${statusEmoji} *${s.plan_name}*\n` +
+                                `   📅 ${fmt(s.start_time)} → ${fmt(s.expiry_time)}`
+                            );
+                        }).join('\n\n');
+
+                        await sock.sendMessage(from, {
+                            text:
+                                `🕓 *Subscription History* (last 6)\n\n` +
+                                `${lines}\n\n` +
+                                `Reply *HI* for the main menu.`,
+                        });
+                    }
+                    await updateSession(db, phone, 'start');
+                    break;
+                }
+
+                // ── 5. Payment History ──────────────────────────────────
+                case '5': {
+                    const payments = await db.query(`
+                        SELECT amount, status, paid_at, created_at
+                        FROM payments
+                        WHERE user_id = $1
+                        ORDER BY created_at DESC LIMIT 6
+                    `, [user.id]);
+
+                    if (!payments.rows.length) {
+                        await sock.sendMessage(from, {
+                            text:
+                                `💳 *Payment History*\n\n` +
+                                `No payments found on your account yet.\n\n` +
+                                `Reply *1* to buy a plan or *HI* for the main menu.`,
+                        });
+                    } else {
+                        const lines = payments.rows.map((p, i) => {
+                            const statusEmoji = p.status === 'completed' ? '✅' : p.status === 'pending' ? '⏳' : '❌';
+                            const date = p.paid_at || p.created_at;
+                            return (
+                                `${i + 1}. ${statusEmoji} *₦${Number(p.amount).toLocaleString()}*\n` +
+                                `   📅 ${fmt(date)} — ${p.status}`
+                            );
+                        }).join('\n\n');
+
+                        await sock.sendMessage(from, {
+                            text:
+                                `💳 *Payment History* (last 6)\n\n` +
+                                `${lines}\n\n` +
+                                `Reply *HI* for the main menu.`,
+                        });
+                    }
+                    await updateSession(db, phone, 'start');
+                    break;
+                }
+
+                // ── 6. Contact Support ──────────────────────────────────
+                case '6': {
+                    await sock.sendMessage(from, {
+                        text:
+                            `📞 *Chulo ISP Support*\n\n` +
+                            `We're here to help! Reach us via:\n\n` +
+                            `💬 WhatsApp: This chat\n` +
+                            `📧 Email: support@chuloisp.com\n` +
+                            `⏰ Hours: *Mon–Sat, 8am–8pm*\n\n` +
+                            `Describe your issue and our team will respond shortly.\n\n` +
+                            `Reply *HI* to return to the main menu.`,
+                    });
+                    await updateSession(db, phone, 'awaiting_support_message');
+                    break;
+                }
+
+                default:
+                    await sock.sendMessage(from, {
+                        text: `Please reply with a number between *1 and 6*, or send *HI* to see the menu again.`,
+                    });
+            }
+            break;
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // SUPPORT MESSAGE — just acknowledge, no auto-routing
+        // ──────────────────────────────────────────────────────────────────
+        case 'awaiting_support_message': {
+            await sock.sendMessage(from, {
+                text:
+                    `✅ *Message received!*\n\n` +
+                    `Our support team will get back to you shortly.\n\n` +
+                    `Reply *HI* to return to the main menu.`,
+            });
+            await updateSession(db, phone, 'start');
+            break;
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // BUY PLAN — Step 1: pick a plan
+        // ──────────────────────────────────────────────────────────────────
         case 'awaiting_plan_selection': {
             const planId = parseInt(message, 10);
             if (isNaN(planId)) {
                 await sock.sendMessage(from, {
-                    text: `Invalid option. Please reply with a plan number, or send *HI* to see the list again.`,
+                    text: `Please reply with a plan number, or *0* to go back.`,
                 });
                 return;
             }
@@ -100,74 +371,83 @@ export async function handleMessage(sock, from, text, db) {
             const selectedPlan = await getPlan(db, planId);
             if (!selectedPlan) {
                 await sock.sendMessage(from, {
-                    text: `Invalid option. Please reply with a valid plan number, or send *HI* to see the list again.`,
+                    text: `Invalid plan. Please reply with a valid plan number, or *0* to go back.`,
                 });
                 return;
             }
 
             await sock.sendMessage(from, {
-                text: `⏳ Generating your payment account for the *${selectedPlan.name}* plan...`,
+                text: `⏳ Generating your payment account for *${selectedPlan.name}*...`,
             });
 
             try {
-                // Create a dynamic virtual account for this exact transaction (v3 API)
                 const { txRef, accountNumber, bankName } = await createDynamicVirtualAccount(
                     phone,
                     selectedPlan.price,
                     selectedPlan.name
                 );
 
-                // Record the pending payment — txRef links this payment to the webhook
                 await db.query(`
                     INSERT INTO payments (user_id, amount, provider, status, virtual_account_reference)
                     VALUES ($1, $2, 'flutterwave', 'pending', $3)
                 `, [user.id, selectedPlan.price, txRef]);
 
-                // Advance session state and store chosen plan
-                await updateSession(db, phone, 'awaiting_payment', selectedPlan.id);
+                await updateSession(db, phone, 'awaiting_payment', selectedPlan.id, from);
 
                 await sock.sendMessage(from, {
-                    text: `You selected the *${selectedPlan.name}* plan.\n\nPlease transfer exactly *₦${selectedPlan.price}* to:\n\n🏦 Bank: *${bankName}*\n💳 Account Number: *${accountNumber}*\n\n⏱ This account expires in *1 hour*. Your plan activates automatically once payment is received!`,
+                    text:
+                        `✅ *Payment Details*\n\n` +
+                        `📡 Plan: *${selectedPlan.name}*\n` +
+                        `💰 Amount: *₦${Number(selectedPlan.price).toLocaleString()}*\n\n` +
+                        `🏦 Bank: *${bankName}*\n` +
+                        `💳 Account Number: *${accountNumber}*\n\n` +
+                        `⏱ This account expires in *1 hour*.\n` +
+                        `Your plan activates automatically once payment is received! 🎉\n\n` +
+                        `Reply *HI* to cancel and start over.`,
                 });
 
             } catch (err) {
                 console.error('Dynamic VA creation error:', err);
                 await sock.sendMessage(from, {
-                    text: `❌ We couldn’t generate a payment account right now. Please send *HI* to try again.`,
+                    text: `❌ Couldn't generate a payment account right now. Please send *HI* to try again.`,
                 });
             }
             break;
         }
 
-        // ------------------------------------------------------------------
-        // STEP 2: Awaiting payment (webhook handles this automatically;
-        //         "paid" is a manual fallback in case the webhook is delayed)
-        // ------------------------------------------------------------------
+        // ──────────────────────────────────────────────────────────────────
+        // BUY PLAN — Step 2: waiting for Flutterwave webhook
+        // ──────────────────────────────────────────────────────────────────
         case 'awaiting_payment': {
-            if (messageLower === 'paid') {
+            if (msgLower === 'paid') {
                 await sock.sendMessage(from, {
-                    text: `⏳ Verifying your payment... Please wait a moment.`,
+                    text: `⏳ Verifying your payment... please wait a moment.`,
                 });
-
                 try {
-                    const freshUserRes = await db.query('SELECT * FROM users WHERE phone = $1', [phone]);
-                    await fulfillPayment(db, sock, freshUserRes.rows[0]);
+                    const freshUser = await db.query('SELECT * FROM users WHERE phone = $1', [phone]);
+                    await fulfillPayment(db, sock, freshUser.rows[0]);
                 } catch (err) {
-                    console.error('Manual payment fulfillment error:', err);
+                    console.error('Manual payment check error:', err);
                     await sock.sendMessage(from, {
-                        text: `❌ Something went wrong while activating your plan. Please contact support or send *HI* to try again.`,
+                        text: `❌ Couldn't verify payment. Please contact support (reply *6*) or send *HI* to try again.`,
                     });
                 }
             } else {
                 await sock.sendMessage(from, {
-                    text: `⏳ Waiting for your payment. Once the transfer is complete it activates automatically.\n\nReply *PAID* if you've transferred and it hasn't activated, or send *HI* to cancel and start over.`,
+                    text:
+                        `⏳ *Awaiting Payment*\n\n` +
+                        `Your plan activates automatically once the bank transfer is confirmed.\n\n` +
+                        `Reply *PAID* if you've transferred and it hasn't activated yet.\n` +
+                        `Reply *HI* to cancel and start over.`,
                 });
             }
             break;
         }
 
+        // Catch-all — always safe to return to menu
         default:
-            await sock.sendMessage(from, { text: `Type *HI* to see available plans.` });
+            await updateSession(db, phone, 'awaiting_service_selection', null, from);
+            await sock.sendMessage(from, { text: buildWelcomeMessage() });
             break;
     }
 }

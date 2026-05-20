@@ -108,7 +108,7 @@ export async function fulfillPayment(db, sock, user) {
 
     // 8. Provision on MikroTik (over WireGuard) — handled separately so failure doesn't block confirmation
     try {
-        const pin = await provisionHotspotUser(user.phone, plan.name);
+        const pin = await provisionHotspotUser(user.phone, plan.mikrotik_profile);
 
         // Send credentials once MikroTik responds
         if (isRenewal) {
