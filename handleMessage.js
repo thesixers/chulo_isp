@@ -35,15 +35,16 @@ async function getSession(db, phone) {
     return res.rows.length > 0 ? res.rows[0] : { state: 'start', plan_id: null };
 }
 
-async function updateSession(db, phone, state, planId = null) {
+async function updateSession(db, phone, state, planId = null, remoteJid = null) {
     await db.query(`
-        INSERT INTO whatsapp_sessions (phone, state, plan_id)
-        VALUES ($1, $2, $3)
+        INSERT INTO whatsapp_sessions (phone, state, plan_id, remote_jid)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (phone) DO UPDATE
-        SET state        = EXCLUDED.state,
-            plan_id      = COALESCE(EXCLUDED.plan_id, whatsapp_sessions.plan_id),
+        SET state      = EXCLUDED.state,
+            plan_id    = COALESCE(EXCLUDED.plan_id, whatsapp_sessions.plan_id),
+            remote_jid = COALESCE(EXCLUDED.remote_jid, whatsapp_sessions.remote_jid),
             last_updated = CURRENT_TIMESTAMP
-    `, [phone, state, planId]);
+    `, [phone, state, planId, remoteJid]);
 }
 
 async function getPlan(db, id) {
@@ -69,7 +70,8 @@ export async function handleMessage(sock, from, text, db) {
 
     // Global reset — "hi" or "hello" always brings up the plan menu
     if (messageLower === 'hi' || messageLower === 'hello') {
-        await updateSession(db, phone, 'awaiting_plan_selection');
+        // Store the exact 'from' JID so fulfillPayment can send proactively
+        await updateSession(db, phone, 'awaiting_plan_selection', null, from);
 
         const plans = await getAllPlans(db);
         let planText = plans.map(p => `${p.id}. ${p.name} Plan - ₦${p.price}`).join('\n');

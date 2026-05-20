@@ -11,7 +11,15 @@ import { provisionHotspotUser } from './mikrotik.js';
  * @returns {Promise<void>}
  */
 export async function fulfillPayment(db, sock, user) {
-    const remoteJid = `${user.phone}@s.whatsapp.net`;
+    // Use the exact JID stored from the user's last message — avoids LID/phone mismatch
+    const sessionRes = await db.query(
+        `SELECT plan_id, remote_jid FROM whatsapp_sessions WHERE phone = $1`,
+        [user.phone]
+    );
+    const session = sessionRes.rows[0];
+    const remoteJid = session?.remote_jid || `${user.phone}@s.whatsapp.net`;
+
+    console.log(`💬 fulfillPayment: sending to remoteJid=${remoteJid}`);
 
     // 1. Find the user's latest pending payment
     const paymentRes = await db.query(`
@@ -28,9 +36,8 @@ export async function fulfillPayment(db, sock, user) {
         return;
     }
 
-    // 2. Get the plan they selected (stored in their WhatsApp session)
-    const sessionRes = await db.query(`SELECT plan_id FROM whatsapp_sessions WHERE phone = $1`, [user.phone]);
-    const planId = sessionRes.rows[0]?.plan_id;
+    // 2. Get the plan from the session already fetched above
+    const planId = session?.plan_id;
 
     if (!planId) {
         await sock.sendMessage(remoteJid, {

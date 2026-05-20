@@ -7,50 +7,54 @@ function generatePin() {
 }
 
 /**
- * Connects to the MikroTik router via WireGuard tunnel and creates a Hotspot user.
- * @param {string} phone The user's phone number (used as username)
- * @param {string} profileName The name of the hotspot profile (e.g., 'Daily', 'Weekly')
- * @returns {Promise<string>} The generated PIN
+ * Connects to the MikroTik router via WireGuard tunnel and creates/updates a Hotspot user.
+ * @param {string} phone        The user's phone number (used as username)
+ * @param {string} profileName  The hotspot profile name (e.g. 'Daily', 'Weekly')
+ * @returns {Promise<string>}   The generated PIN
  */
 export async function provisionHotspotUser(phone, profileName) {
-    const ip = process.env.MIKROTIK_TUNNEL_IP;
-    const port = process.env.MIKROTIK_PORT || 8728;
+    const ip   = process.env.MIKROTIK_TUNNEL_IP;
+    const port = parseInt(process.env.MIKROTIK_PORT) || 8728;
     const user = process.env.MIKROTIK_USER;
     const pass = process.env.MIKROTIK_PASS;
 
     const pin = generatePin();
 
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
+        let conn;
         try {
-            const device = getConnection(ip, port);
-            const [loginPromise, conn] = await device.connect(user, pass);
-            
-            const channel = conn.openChannel("hotspot_provision");
-            
-            channel.on('done', (parsed) => {
+            conn = getConnection(ip, port, user, pass);
+        } catch (e) {
+            return reject(e);
+        }
+
+        conn.on('error', (err) => {
+            console.error('MikroTik connection error:', err);
+            reject(err);
+        });
+
+        conn.on('connected', (connection) => {
+            const channel = connection.openChannel('hotspot_provision');
+
+            channel.on('done', () => {
                 channel.close();
-                conn.close();
-                resolve(pin); // Return the PIN so we can text it to the user
+                connection.close();
+                resolve(pin);
             });
-            
+
             channel.on('error', (err) => {
-                conn.close();
-                console.error("MikroTik Router Error:", err);
+                console.error('MikroTik channel error:', err);
+                connection.close();
                 reject(err);
             });
 
-            // Send the command to add the user. 
-            // Note: The profileName MUST exist in the MikroTik router exactly as written.
+            // Try to add the user; if they already exist, update their password
             channel.write([
                 '/ip/hotspot/user/add',
                 `=name=${phone}`,
                 `=password=${pin}`,
-                `=profile=${profileName}`
+                `=profile=${profileName}`,
             ]);
-            
-        } catch (error) {
-            console.error("Failed to connect to MikroTik over WireGuard:", error);
-            reject(error);
-        }
+        });
     });
 }

@@ -5,6 +5,14 @@ import pg from "pg"
 import { fulfillPayment } from "./fulfillPayment.js"
 import fs from "fs"
 
+// Prevent third-party library errors (e.g. mikronode-ng socket callbacks) from crashing the server
+process.on('uncaughtException', (err) => {
+    console.error('⚠️  Uncaught Exception (non-fatal):', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('⚠️  Unhandled Promise Rejection (non-fatal):', reason);
+});
+
 const app = vibe({
     logger: {
     lifecycle: true,
@@ -52,9 +60,12 @@ app.get("/", () => "Welcome to Chulo ISP")
 app.get("/test-send", async (req, res) => {
     if (!globalSock) return res.status(503).send("WhatsApp not connected");
     try {
-        const testJid = `211501453426763@s.whatsapp.net`;
-        await globalSock.sendMessage(testJid, { text: "🔔 Test message from Chulo ISP server" });
-        res.send(`✅ Message sent to ${testJid}`);
+        // Use the stored remote_jid from the last known session
+        const result = await db.query(`SELECT remote_jid FROM whatsapp_sessions ORDER BY last_updated DESC LIMIT 1`);
+        const jid = result.rows[0]?.remote_jid;
+        if (!jid) return res.status(404).send("No session found in DB");
+        await globalSock.sendMessage(jid, { text: "🔔 Test message from Chulo ISP server" });
+        res.send(`✅ Message sent to ${jid}`);
     } catch (err) {
         res.status(500).send(`❌ Failed: ${err.message}`);
     }
