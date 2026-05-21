@@ -3,6 +3,7 @@ import { handleMessage } from "./handleMessage.js"
 import { connectToWhatsApp } from "./whatsapp-connect.js"
 import pg from "pg"
 import { fulfillPayment } from "./fulfillPayment.js"
+import { processPendingQueue } from "./provisioningQueue.js"
 import fs from "fs"
 
 // Prevent third-party library errors (e.g. mikronode-ng socket callbacks) from crashing the server
@@ -119,4 +120,16 @@ app.post("/webhook/flutterwave", async (req, res) => {
 app.listen(process.env.PORT || 3001, () => {
   startBot();
   setupDB();
+
+  // Provisioning retry scheduler — checks every 60s for queued MikroTik jobs
+  setInterval(async () => {
+      if (!globalSock) return; // Don't retry if WhatsApp isn't connected yet
+      try {
+          await processPendingQueue(db, globalSock);
+      } catch (err) {
+          console.error('⚠️ Provisioning queue scheduler error:', err.message);
+      }
+  }, 60_000); // every 60 seconds
+
+  console.log('🕐 Provisioning retry scheduler started (60s interval)');
 })

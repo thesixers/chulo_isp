@@ -1,4 +1,5 @@
 import { provisionHotspotUser } from './mikrotik.js';
+import { enqueueProvisioning } from './provisioningQueue.js';
 
 /**
  * Fulfills a confirmed payment for a user.
@@ -106,26 +107,61 @@ export async function fulfillPayment(db, sock, user) {
         console.error(`❌ Failed to send confirmation message to ${remoteJid}:`, msgErr);
     }
 
-    // 8. Provision on MikroTik (over WireGuard) — handled separately so failure doesn't block confirmation
-    try {
-        const pin = await provisionHotspotUser(user.phone, plan.mikrotik_profile);
+    // 8. Provision on MikroTik — pre-generate PIN so retries always use the same credentials
+    const pin = Math.floor(100000 + Math.random() * 900000).toString();
 
-        // Send credentials once MikroTik responds
+    try {
+        await provisionHotspotUser(user.phone, plan.mikrotik_profile, pin);
+
+        // Success — send credentials
         if (isRenewal) {
             await sock.sendMessage(remoteJid, {
-                text: `🎉 *You're back online!*\n\n🌐 *Your Starlink Login*\nUsername: \`${user.phone}\`\nPassword: \`${pin}\`\n\nConnect at: *http://hotspot.chulo*\nEnjoy your internet! 🛰️`,
+                text:
+                    `🎉 *You're back online!*\n\n` +
+                    `🌐 *Your Starlink Login*\n` +
+                    `Username: \`${user.phone}\`\n` +
+                    `Password: \`${pin}\`\n\n` +
+                    `Connect at: *http://hotspot.chulo*\n` +
+                    `Enjoy your internet! 🛰️`,
             });
         } else {
             await sock.sendMessage(remoteJid, {
-                text: `🎉 *Your Chulo Starlink account is ready!*\n\n🌐 *Login Details*\nUsername: \`${user.phone}\`\nPassword: \`${pin}\`\n\nConnect at: *http://hotspot.chulo*\n\nWelcome to Chulo ISP! 🛰️`,
+                text:
+                    `🎉 *Your Chulo Starlink account is ready!*\n\n` +
+                    `🌐 *Login Details*\n` +
+                    `Username: \`${user.phone}\`\n` +
+                    `Password: \`${pin}\`\n\n` +
+                    `Connect at: *http://hotspot.chulo*\n\n` +
+                    `Welcome to Chulo ISP! 🛰️`,
             });
         }
-    } catch (err) {
-        console.error('MikroTik provisioning failed:', err);
 
-        // Let the user know credentials will be sent manually
+    } catch (err) {
+        console.error('MikroTik provisioning failed — queuing for retry:', err.message);
+
+        // Notify user we'll retry automatically
         await sock.sendMessage(remoteJid, {
-            text: `⚙️ Your account is active but we're experiencing a brief delay setting up your login credentials.\n\nOur team will send your *username and password* shortly. Thank you for your patience! 🙏`,
+            text:
+                `⚙️ *Account Setup in Progress*\n\n` +
+                `Your payment is confirmed and your subscription is active ✅\n\n` +
+                `We're having a brief issue setting up your hotspot login. ` +
+                `Our system will *automatically retry* and send your credentials ` +
+                `once the connection is restored.\n\n` +
+                `⏳ You'll receive your username and password shortly — no action needed!`,
         });
+
+        // Save to retry queue — scheduler will keep trying until MikroTik is reachable
+        try {
+            await enqueueProvisioning(db, {
+                userId: user.id,
+                remoteJid,
+                phone: user.phone,
+                mikrotikProfile: plan.mikrotik_profile,
+                planName: plan.name,
+                pin,
+            });
+        } catch (queueErr) {
+            console.error('Failed to enqueue provisioning job:', queueErr.message);
+        }
     }
 }

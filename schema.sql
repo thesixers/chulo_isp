@@ -81,6 +81,24 @@ CREATE TABLE IF NOT EXISTS whatsapp_sessions (
 -- Add remote_jid to existing sessions table
 ALTER TABLE whatsapp_sessions ADD COLUMN IF NOT EXISTS remote_jid VARCHAR(100);
 
+-- MikroTik provisioning retry queue
+CREATE TABLE IF NOT EXISTS provisioning_queue (
+    id               SERIAL PRIMARY KEY,
+    user_id          INTEGER REFERENCES users(id),
+    remote_jid       VARCHAR(100) NOT NULL,      -- WhatsApp JID to notify on success/failure
+    phone            VARCHAR(200) NOT NULL,       -- MikroTik username
+    mikrotik_profile VARCHAR(100) NOT NULL,
+    plan_name        VARCHAR(225),
+    pin              VARCHAR(10) NOT NULL,        -- Pre-generated PIN (consistent across retries)
+    attempts         INTEGER DEFAULT 0,
+    max_attempts     INTEGER DEFAULT 10,
+    status           VARCHAR(20) DEFAULT 'pending', -- pending | completed | abandoned
+    next_retry_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_attempted_at TIMESTAMP,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_prov_queue_pending ON provisioning_queue (status, next_retry_at);
+
 -- =============================================================================
 -- MIGRATION SCRIPT
 -- Run these statements manually if you already have an existing database.
