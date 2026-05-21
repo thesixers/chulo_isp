@@ -1,7 +1,5 @@
-import pkg from 'mikronode-ng';
-const { getConnection } = pkg;
+import { RouterOSAPI } from 'node-routeros';
 
-// Generates a random 6-digit PIN for the Hotspot password
 function generatePin() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -14,48 +12,41 @@ function generatePin() {
  * @returns {Promise<string>}     The PIN used
  */
 export async function provisionHotspotUser(phone, profileName, existingPin = null) {
-    const ip   = process.env.MIKROTIK_TUNNEL_IP;
-    const port = parseInt(process.env.MIKROTIK_PORT) || 8728;
-    const user = process.env.MIKROTIK_USER;
-    const pass = process.env.MIKROTIK_PASS;
-
     const pin = existingPin || generatePin();
 
-    return new Promise((resolve, reject) => {
-        let conn;
+    const conn = new RouterOSAPI({
+        host:     process.env.MIKROTIK_TUNNEL_IP,
+        user:     process.env.MIKROTIK_USER,
+        password: process.env.MIKROTIK_PASS,
+        port:     parseInt(process.env.MIKROTIK_PORT) || 8728,
+        timeout:  10, // seconds
+    });
+
+    await conn.connect();
+
+    try {
+        // Try to add the user; if they already exist, update their password instead
         try {
-            conn = getConnection(ip, port, user, pass);
-        } catch (e) {
-            return reject(e);
-        }
-
-        conn.on('error', (err) => {
-            console.error('MikroTik connection error:', err);
-            reject(err);
-        });
-
-        conn.on('connected', (connection) => {
-            const channel = connection.openChannel('hotspot_provision');
-
-            channel.on('done', () => {
-                channel.close();
-                connection.close();
-                resolve(pin);
-            });
-
-            channel.on('error', (err) => {
-                console.error('MikroTik channel error:', err);
-                connection.close();
-                reject(err);
-            });
-
-            // Try to add the user; if they already exist, update their password
-            channel.write([
-                '/ip/hotspot/user/add',
+            await conn.write('/ip/hotspot/user/add', [
                 `=name=${phone}`,
                 `=password=${pin}`,
                 `=profile=${profileName}`,
             ]);
-        });
-    });
+        } catch (addErr) {
+            // User already exists — update their password and profile
+            if (addErr.message?.includes('already have')) {
+                await conn.write('/ip/hotspot/user/set', [
+                    `=numbers=${phone}`,
+                    `=password=${pin}`,
+                    `=profile=${profileName}`,
+                ]);
+            } else {
+                throw addErr;
+            }
+        }
+    } finally {
+        conn.close();
+    }
+
+    return pin;
 }

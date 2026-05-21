@@ -1,52 +1,43 @@
-import { MikroNode } from 'mikronode-ng';
+import { RouterOSAPI } from 'node-routeros';
 
 async function testMikroTikConnection() {
-    const ip = process.env.MIKROTIK_TUNNEL_IP;
-    const port = process.env.MIKROTIK_PORT || 8728;
+    const ip   = process.env.MIKROTIK_TUNNEL_IP;
+    const port = parseInt(process.env.MIKROTIK_PORT) || 8728;
     const user = process.env.MIKROTIK_USER;
     const pass = process.env.MIKROTIK_PASS;
 
-    console.log(`⏳ Attempting to connect to MikroTik Router via WireGuard Tunnel at ${ip}:${port}...`);
+    console.log(`⏳ Connecting to MikroTik at ${ip}:${port} as '${user}'...`);
 
-    try {
-        // Initialize the MikroNode connection
-        const device = new MikroNode(ip, port);
-        
-        // Authenticate
-        const [loginPromise, conn] = await device.connect(user, pass);
-        
-        console.log("✅ Successfully authenticated with MikroTik Router!");
-        
-        // Open a channel to send a command
-        const channel = conn.openChannel("test_channel");
-        
-        // Listen for the response
-        channel.on('done', (parsed) => {
-            console.log("\n📡 Router Identity Details:");
-            console.log(parsed.data);
-            
-            // Clean up and disconnect
-            channel.close();
-            conn.close();
-            console.log("\n🔌 Disconnected successfully.");
-            process.exit(0);
-        });
-        
-        channel.on('error', (err) => {
-            console.error("\n❌ Error running command:", err);
-            conn.close();
-            process.exit(1);
-        });
+    const conn = new RouterOSAPI({
+        host:     ip,
+        user:     user,
+        password: pass,
+        port:     port,
+        timeout:  8,
+    });
 
-        // Request the router's identity to prove the connection works
-        console.log("▶️ Sending command: /system/identity/print");
-        channel.write('/system/identity/print');
+    await conn.connect();
+    console.log('✅ Connected and authenticated!');
 
-    } catch (error) {
-        console.error("\n❌ Failed to connect to MikroTik. Make sure you are running this on the Oracle VM where the WireGuard tunnel is active.");
-        console.error("Error details:", error.message || error);
-        process.exit(1);
-    }
+    const identity = await conn.write('/system/identity/print');
+    console.log('\n📡 Router Identity:', identity);
+
+    const resources = await conn.write('/system/resource/print');
+    console.log('💻 System Resources:', {
+        uptime:   resources[0]?.uptime,
+        version:  resources[0]?.version,
+        platform: resources[0]?.platform,
+    });
+
+    conn.close();
 }
 
-testMikroTikConnection();
+testMikroTikConnection()
+    .then(() => {
+        console.log('\n🎉 MikroTik test passed — WireGuard tunnel is working!');
+        process.exit(0);
+    })
+    .catch((err) => {
+        console.error(`\n❌ MikroTik test failed: ${err.message}`);
+        process.exit(1);
+    });
