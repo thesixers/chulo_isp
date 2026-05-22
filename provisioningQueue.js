@@ -66,7 +66,7 @@ async function processJob(db, sock, job) {
                 `🌐 *Login Details*\n` +
                 `Username: \`${job.phone}\`\n` +
                 `Password: \`${job.pin}\`\n\n` +
-                `Connect at: *http://hotspot.chulo*\n\n` +
+                `Connect at: *http://10.5.50.1*\n\n` +
                 `Welcome to Chulo ISP! 🛰️`,
         });
 

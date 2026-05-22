@@ -17,23 +17,37 @@ DO $$ BEGIN
         'awaiting_service_selection',
         'awaiting_plan_selection',
         'awaiting_payment',
-        'awaiting_support_message'
+        'awaiting_support_message',
+        'awaiting_hotspot_username',
+        'awaiting_hotspot_password',
+        'awaiting_new_username',
+        'awaiting_new_password'
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Add new session states to existing DBs (safe — IF NOT EXISTS)
 DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_service_selection'; EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_support_message'; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_hotspot_username'; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_hotspot_password'; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_new_username'; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_new_password'; EXCEPTION WHEN others THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     phone VARCHAR(200) UNIQUE,
     name VARCHAR(225),
+    hotspot_username VARCHAR(50),   -- User-chosen MikroTik hotspot username
+    hotspot_password VARCHAR(100),  -- User-chosen MikroTik hotspot password
     status user_status DEFAULT 'active',
-    flutterwave_customer_id VARCHAR(100),  -- FLW customer ID, auto-created on first contact
+    flutterwave_customer_id VARCHAR(100),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Add hotspot credential columns to existing users table
+ALTER TABLE users ADD COLUMN IF NOT EXISTS hotspot_username VARCHAR(50);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS hotspot_password VARCHAR(100);
 
 CREATE TABLE IF NOT EXISTS plans (
     id SERIAL PRIMARY KEY,

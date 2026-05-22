@@ -2,14 +2,13 @@ import { provisionHotspotUser } from './mikrotik.js';
 import { enqueueProvisioning } from './provisioningQueue.js';
 
 /**
- * Fulfills a confirmed payment for a user.
- * Sends an immediate confirmation message, then attempts MikroTik provisioning separately.
- * MikroTik failure does NOT block the confirmation — the user always gets notified.
+ * Fulfills a confirmed payment:
+ * - First-time users: sends confirmation, then asks them to choose a hotspot username/password
+ * - Renewals: sends confirmation, then re-provisions on MikroTik using stored credentials
  *
- * @param {object} db       - pg Pool instance
- * @param {object} sock     - Baileys socket instance
- * @param {object} user     - Full user row from the `users` table
- * @returns {Promise<void>}
+ * @param {object} db   - pg Pool instance
+ * @param {object} sock - Baileys socket instance
+ * @param {object} user - Full user row from the `users` table
  */
 export async function fulfillPayment(db, sock, user) {
     // Use the exact JID stored from the user's last message — avoids LID/phone mismatch
@@ -17,10 +16,10 @@ export async function fulfillPayment(db, sock, user) {
         `SELECT plan_id, remote_jid FROM whatsapp_sessions WHERE phone = $1`,
         [user.phone]
     );
-    const session = sessionRes.rows[0];
+    const session   = sessionRes.rows[0];
     const remoteJid = session?.remote_jid || `${user.phone}@s.whatsapp.net`;
 
-    console.log(`💬 fulfillPayment: sending to remoteJid=${remoteJid}`);
+    console.log(`💬 fulfillPayment: remoteJid=${remoteJid}`);
 
     // 1. Find the user's latest pending payment
     const paymentRes = await db.query(`
@@ -37,9 +36,8 @@ export async function fulfillPayment(db, sock, user) {
         return;
     }
 
-    // 2. Get the plan from the session already fetched above
+    // 2. Get the plan from the session
     const planId = session?.plan_id;
-
     if (!planId) {
         await sock.sendMessage(remoteJid, {
             text: `⚠️ We couldn't find your selected plan. Please send *HI* to start over.`,
@@ -48,8 +46,7 @@ export async function fulfillPayment(db, sock, user) {
     }
 
     const planRes = await db.query(`SELECT * FROM plans WHERE id = $1`, [planId]);
-    const plan = planRes.rows[0];
-
+    const plan    = planRes.rows[0];
     if (!plan) {
         await sock.sendMessage(remoteJid, {
             text: `⚠️ Your selected plan no longer exists. Please send *HI* to choose a new one.`,
@@ -57,13 +54,13 @@ export async function fulfillPayment(db, sock, user) {
         return;
     }
 
-    // 3. Mark the payment as completed
+    // 3. Mark payment as completed
     await db.query(
         `UPDATE payments SET status = 'completed', paid_at = CURRENT_TIMESTAMP WHERE id = $1`,
         [payment.id]
     );
 
-    // 4. Calculate subscription expiry (extend from current active sub if one exists)
+    // 4. Calculate subscription expiry (extend from current active sub if renewal)
     const activeSubRes = await db.query(`
         SELECT * FROM subscriptions
         WHERE user_id = $1 AND status = 'active' AND expiry_time > CURRENT_TIMESTAMP
@@ -73,9 +70,7 @@ export async function fulfillPayment(db, sock, user) {
     const isRenewal = activeSubRes.rows.length > 0;
 
     let newExpiry = new Date();
-    if (isRenewal) {
-        newExpiry = new Date(activeSubRes.rows[0].expiry_time);
-    }
+    if (isRenewal) newExpiry = new Date(activeSubRes.rows[0].expiry_time);
     newExpiry.setDate(newExpiry.getDate() + plan.duration_days);
 
     // 5. Create the subscription record
@@ -84,54 +79,80 @@ export async function fulfillPayment(db, sock, user) {
         VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3)
     `, [user.id, plan.id, newExpiry]);
 
-    // 6. Reset their WhatsApp session so they can buy again later
-    await db.query(`
-        UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL, last_updated = CURRENT_TIMESTAMP
-        WHERE phone = $1
-    `, [user.phone]);
-
-    // 7. Send immediate payment confirmation — this always goes out regardless of MikroTik
+    // 6. Send payment confirmation
     console.log(`📤 Sending payment confirmation to ${remoteJid} (isRenewal=${isRenewal})`);
     try {
-        if (isRenewal) {
-            await sock.sendMessage(remoteJid, {
-                text: `✅ *Payment Confirmed!*\n\n💰 ₦${plan.price} received for your *${plan.name}* plan.\n\n🔄 *Reconnecting you to Chulo Starlink...*\n\n📅 Your access is extended until *${newExpiry.toDateString()}*.\n\nPlease wait a moment while we update your connection.`,
-            });
-        } else {
-            await sock.sendMessage(remoteJid, {
-                text: `✅ *Payment Confirmed!*\n\n💰 ₦${plan.price} received for your *${plan.name}* plan.\n\n🚀 *Creating your Chulo Starlink login...*\n\n📅 Your access expires on *${newExpiry.toDateString()}*.\n\nPlease wait a moment while we set up your account.`,
-            });
-        }
-        console.log(`✅ Confirmation message sent to ${remoteJid}`);
+        await sock.sendMessage(remoteJid, {
+            text:
+                `✅ *Payment Confirmed!*\n\n` +
+                `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n` +
+                `📅 Expires: *${newExpiry.toDateString()}*`,
+        });
     } catch (msgErr) {
-        console.error(`❌ Failed to send confirmation message to ${remoteJid}:`, msgErr);
+        console.error(`❌ Failed to send confirmation to ${remoteJid}:`, msgErr.message);
     }
 
-    // 8. Provision on MikroTik — pre-generate PIN so retries always use the same credentials
-    const pin = Math.floor(100000 + Math.random() * 900000).toString();
+    // 7. Branch: renewal vs first-time
+    if (isRenewal && user.hotspot_username && user.hotspot_password) {
+        // ── RENEWAL: provision using stored credentials ──────────────────────
+        await db.query(
+            `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL WHERE phone = $1`,
+            [user.phone]
+        );
+        await provisionOrQueue(db, sock, user, plan, remoteJid, user.hotspot_username, user.hotspot_password, true);
 
+    } else {
+        // ── FIRST TIME (or credentials not yet set): ask user to choose them ──
+        await db.query(`
+            UPDATE whatsapp_sessions
+            SET state = 'awaiting_hotspot_username', plan_id = $1, last_updated = CURRENT_TIMESTAMP
+            WHERE phone = $2
+        `, [plan.id, user.phone]);
+
+        await sock.sendMessage(remoteJid, {
+            text:
+                `🔐 *Set Up Your Hotspot Login*\n\n` +
+                `Please choose a *username* for your internet connection.\n\n` +
+                `Rules:\n` +
+                `• Letters and numbers only (no emojis or spaces)\n` +
+                `• 3–20 characters\n` +
+                `• Example: \`john2024\`\n\n` +
+                `Reply with your desired username:`,
+        });
+    }
+}
+
+/**
+ * Provisions the user on MikroTik or queues for retry on failure.
+ */
+export async function provisionOrQueue(db, sock, user, plan, remoteJid, username, password, isRenewal) {
     try {
-        await provisionHotspotUser(user.phone, plan.mikrotik_profile, pin);
+        await provisionHotspotUser(username, plan.mikrotik_profile, password);
 
-        // Success — send credentials
+        // Save credentials on the user record
+        await db.query(
+            `UPDATE users SET hotspot_username = $1, hotspot_password = $2 WHERE id = $3`,
+            [username, password, user.id]
+        );
+
         if (isRenewal) {
             await sock.sendMessage(remoteJid, {
                 text:
                     `🎉 *You're back online!*\n\n` +
                     `🌐 *Your Starlink Login*\n` +
-                    `Username: \`${user.phone}\`\n` +
-                    `Password: \`${pin}\`\n\n` +
-                    `Connect at: *http://hotspot.chulo*\n` +
+                    `Username: \`${username}\`\n` +
+                    `Password: \`${password}\`\n\n` +
+                    `Connect at: *http://10.5.50.1*\n` +
                     `Enjoy your internet! 🛰️`,
             });
         } else {
             await sock.sendMessage(remoteJid, {
                 text:
-                    `🎉 *Your Chulo Starlink account is ready!*\n\n` +
+                    `🎉 *Your Chulo ISP account is ready!*\n\n` +
                     `🌐 *Login Details*\n` +
-                    `Username: \`${user.phone}\`\n` +
-                    `Password: \`${pin}\`\n\n` +
-                    `Connect at: *http://hotspot.chulo*\n\n` +
+                    `Username: \`${username}\`\n` +
+                    `Password: \`${password}\`\n\n` +
+                    `Connect at: *http://10.5.50.1*\n\n` +
                     `Welcome to Chulo ISP! 🛰️`,
             });
         }
@@ -139,26 +160,23 @@ export async function fulfillPayment(db, sock, user) {
     } catch (err) {
         console.error('MikroTik provisioning failed — queuing for retry:', err.message);
 
-        // Notify user we'll retry automatically
         await sock.sendMessage(remoteJid, {
             text:
                 `⚙️ *Account Setup in Progress*\n\n` +
-                `Your payment is confirmed and your subscription is active ✅\n\n` +
-                `We're having a brief issue setting up your hotspot login. ` +
-                `Our system will *automatically retry* and send your credentials ` +
-                `once the connection is restored.\n\n` +
-                `⏳ You'll receive your username and password shortly — no action needed!`,
+                `Your payment is confirmed ✅\n\n` +
+                `We're having a brief issue connecting to the hotspot router. ` +
+                `Our system will *automatically retry* and send your credentials once restored.\n\n` +
+                `⏳ No action needed — you'll receive your login details shortly!`,
         });
 
-        // Save to retry queue — scheduler will keep trying until MikroTik is reachable
         try {
             await enqueueProvisioning(db, {
                 userId: user.id,
                 remoteJid,
-                phone: user.phone,
+                phone: username, // username IS the MikroTik username
                 mikrotikProfile: plan.mikrotik_profile,
                 planName: plan.name,
-                pin,
+                pin: password,
             });
         } catch (queueErr) {
             console.error('Failed to enqueue provisioning job:', queueErr.message);

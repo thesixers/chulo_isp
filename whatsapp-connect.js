@@ -58,9 +58,10 @@ export async function connectToWhatsApp(onMessage, onReconnect) {
             msg.message.conversation ||
             msg.message.extendedTextMessage?.text;
 
-        const from = msg.key.remoteJid;
+        const from     = msg.key.remoteJid;
+        const pushName = msg.pushName || null; // WhatsApp display name
 
-        await onMessage(sock, from, text);
+        await onMessage(sock, from, text, pushName);
     });
 
     return sock;
