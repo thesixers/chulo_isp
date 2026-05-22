@@ -152,12 +152,14 @@ function buildDeviceMenu() {
     );
 }
 
+const EMOJI_NUMS = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣'];
+
 function buildFilteredPlanMenu(plans, label) {
     let text = `📡 *${label} Plans*\n\n`;
-    text += plans.map(p =>
-        `${p.id}. ${spellPlanName(p.name)} — ₦${Number(p.price).toLocaleString()}`
+    text += plans.map((p, i) =>
+        `${EMOJI_NUMS[i]}  ${spellPlanName(p.name)} — ₦${Number(p.price).toLocaleString()}`
     ).join('\n');
-    text += `\n\nReply with the plan number, or *0* to go back.`;
+    text += `\n\nReply with the plan number (1–${plans.length}), or *0* to go back.`;
     return text;
 }
 
@@ -404,24 +406,21 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
         // BUY PLAN — Step 0: pick number of devices
         // ──────────────────────────────────────────────────────────────────
         case 'awaiting_device_selection': {
-            if (message === '1') {
+            const profileMap = {
+                '1': { profile: '7/7_Mbps_1Users', label: 'Single Device' },
+                '2': { profile: '7/7_Mbps_2Users', label: 'Two Devices'   },
+                '3': { profile: '7/7_Mbps_3Users', label: 'Three Devices' },
+            };
+            const choice = profileMap[message];
+            if (choice) {
                 const res = await db.query(
-                    `SELECT * FROM plans WHERE mikrotik_profile = '7/7_Mbps_1Users' ORDER BY duration_days DESC`
+                    `SELECT * FROM plans WHERE mikrotik_profile = $1 ORDER BY duration_days DESC`,
+                    [choice.profile]
                 );
-                await updateSession(db, phone, 'awaiting_plan_selection', null, from);
-                await sock.sendMessage(from, { text: buildFilteredPlanMenu(res.rows, 'Single Device') });
-            } else if (message === '2') {
-                const res = await db.query(
-                    `SELECT * FROM plans WHERE mikrotik_profile = '7/7_Mbps_2Users' ORDER BY duration_days DESC`
-                );
-                await updateSession(db, phone, 'awaiting_plan_selection', null, from);
-                await sock.sendMessage(from, { text: buildFilteredPlanMenu(res.rows, 'Two Devices') });
-            } else if (message === '3') {
-                const res = await db.query(
-                    `SELECT * FROM plans WHERE mikrotik_profile = '7/7_Mbps_3Users' ORDER BY duration_days DESC`
-                );
-                await updateSession(db, phone, 'awaiting_plan_selection', null, from);
-                await sock.sendMessage(from, { text: buildFilteredPlanMenu(res.rows, 'Three Devices') });
+                // Store baseId in plan_id so positional selection works
+                const baseId = res.rows[0]?.id;
+                await updateSession(db, phone, 'awaiting_plan_selection', baseId, from);
+                await sock.sendMessage(from, { text: buildFilteredPlanMenu(res.rows, choice.label) });
             } else {
                 await sock.sendMessage(from, {
                     text: `Please reply *1* for Single, *2* for Two, or *3* for Three Devices, or *0* to go back.`,
@@ -448,18 +447,20 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
         // BUY PLAN — Step 1: pick a plan
         // ──────────────────────────────────────────────────────────────────
         case 'awaiting_plan_selection': {
-            const planId = parseInt(message, 10);
-            if (isNaN(planId)) {
+            const position = parseInt(message, 10);
+            if (isNaN(position) || position < 1 || position > 9) {
                 await sock.sendMessage(from, {
-                    text: `Please reply with a plan number, or *0* to go back.`,
+                    text: `Please reply with a plan number (1–5), or *0* to go back.`,
                 });
                 return;
             }
 
-            const selectedPlan = await getPlan(db, planId);
+            // session.plan_id holds the base DB id for the chosen device tier
+            const actualId = (session.plan_id || 1) + position - 1;
+            const selectedPlan = await getPlan(db, actualId);
             if (!selectedPlan) {
                 await sock.sendMessage(from, {
-                    text: `Invalid plan. Please reply with a valid plan number, or *0* to go back.`,
+                    text: `Invalid selection. Please reply with a number from the list, or *0* to go back.`,
                 });
                 return;
             }
