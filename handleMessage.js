@@ -187,6 +187,11 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
     const phone    = pnJid.split('@')[0];
     const pnPhone  = phone; // alias for clarity in admin check
 
+    console.log("from", from);
+    console.log("pnJid", pnJid);
+    console.log("phone", phone);
+    console.log("pnPhone", pnPhone);
+
     const user    = await upsertUser(db, phone, pushName);
     const session = await getSession(db, phone);
     const firstName = (user.name || pushName || 'there').split(' ')[0];
