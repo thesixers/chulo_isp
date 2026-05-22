@@ -4,6 +4,7 @@ import { connectToWhatsApp } from "./whatsapp-connect.js"
 import pg from "pg"
 import { fulfillPayment } from "./fulfillPayment.js"
 import { processPendingQueue } from "./provisioningQueue.js"
+import { startScheduler } from "./scheduler.js"
 import fs from "fs"
 
 // Prevent third-party library errors (e.g. mikronode-ng socket callbacks) from crashing the server
@@ -138,4 +139,7 @@ app.listen(process.env.PORT || 3001, () => {
   }, 60_000); // every 60 seconds
 
   console.log('🕐 Provisioning retry scheduler started (60s interval)');
+
+  // Expiry alerts + MikroTik cleanup
+  startScheduler(db, () => globalSock);
 })

@@ -1,4 +1,4 @@
-import { provisionHotspotUser } from './mikrotik.js';
+import { provisionHotspotUser, buildMikrotikComment } from './mikrotik.js';
 import { enqueueProvisioning } from './provisioningQueue.js';
 
 /**
@@ -68,15 +68,19 @@ export async function fulfillPayment(db, sock, user) {
     `, [user.id]);
 
     const isRenewal = activeSubRes.rows.length > 0;
+    const renewingEarly = isRenewal && new Date(activeSubRes.rows[0].expiry_time) > new Date();
+    // Loyalty bonus: monthly plans get 3 free days, weekly/3-day get 1 free day
+    const bonusDays = renewingEarly ? (plan.duration_days >= 28 ? 3 : 1) : 0;
 
     let newExpiry = new Date();
     if (isRenewal) newExpiry = new Date(activeSubRes.rows[0].expiry_time);
-    newExpiry.setDate(newExpiry.getDate() + plan.duration_days);
+    newExpiry.setDate(newExpiry.getDate() + plan.duration_days + bonusDays);
+    const mikrotikComment = buildMikrotikComment(plan.duration_days, newExpiry);
 
-    // 5. Create the subscription record
+    // 5. Create the subscription record (reset alert_sent for fresh alert cycle)
     await db.query(`
-        INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time)
-        VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3)
+        INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time, alert_sent)
+        VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3, false)
     `, [user.id, plan.id, newExpiry]);
 
     // 6. Send payment confirmation
@@ -86,7 +90,9 @@ export async function fulfillPayment(db, sock, user) {
             text:
                 `✅ *Payment Confirmed!*\n\n` +
                 `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n` +
-                `📅 Expires: *${newExpiry.toDateString()}*`,
+                `📅 Expires: *${newExpiry.toDateString()}*` +
+                (renewingEarly ? `\n\n🎁 *+${bonusDays} free day${bonusDays > 1 ? 's' : ''} added* for renewing early! 🎉` : '') +
+                promoTip(plan.duration_days),
         });
     } catch (msgErr) {
         console.error(`❌ Failed to send confirmation to ${remoteJid}:`, msgErr.message);
@@ -99,7 +105,7 @@ export async function fulfillPayment(db, sock, user) {
             `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL WHERE phone = $1`,
             [user.phone]
         );
-        await provisionOrQueue(db, sock, user, plan, remoteJid, user.hotspot_username, user.hotspot_password, true);
+        await provisionOrQueue(db, sock, user, plan, remoteJid, user.hotspot_username, user.hotspot_password, true, newExpiry);
 
     } else {
         // ── FIRST TIME (or credentials not yet set): ask user to choose them ──
@@ -125,9 +131,16 @@ export async function fulfillPayment(db, sock, user) {
 /**
  * Provisions the user on MikroTik or queues for retry on failure.
  */
-export async function provisionOrQueue(db, sock, user, plan, remoteJid, username, password, isRenewal) {
+function promoTip(durationDays) {
+    if (durationDays >= 28) return '\n\n🎁 *Tip: Renew before your plan expires and get 3 FREE days added!*';
+    if (durationDays >=  3) return '\n\n🎁 *Tip: Renew before your plan expires and get 1 FREE day added!*';
+    return '';
+}
+
+export async function provisionOrQueue(db, sock, user, plan, remoteJid, username, password, isRenewal, expiryTime = null) {
     try {
-        await provisionHotspotUser(username, plan.mikrotik_profile, password);
+        const comment = expiryTime ? buildMikrotikComment(plan.duration_days, expiryTime) : null;
+        await provisionHotspotUser(username, plan.mikrotik_profile, password, comment);
 
         // Save credentials on the user record
         await db.query(
@@ -143,7 +156,8 @@ export async function provisionOrQueue(db, sock, user, plan, remoteJid, username
                     `Username: \`${username}\`\n` +
                     `Password: \`${password}\`\n\n` +
                     `Connect at: *http://10.5.50.1*\n` +
-                    `Enjoy your internet! 🛰️`,
+                    `Enjoy your internet! 🛰️` +
+                    promoTip(plan.duration_days),
             });
         } else {
             await sock.sendMessage(remoteJid, {
@@ -153,7 +167,8 @@ export async function provisionOrQueue(db, sock, user, plan, remoteJid, username
                     `Username: \`${username}\`\n` +
                     `Password: \`${password}\`\n\n` +
                     `Connect at: *http://10.5.50.1*\n\n` +
-                    `Welcome to Chulo ISP! 🛰️`,
+                    `Welcome to Chulo ISP! 🛰️` +
+                    promoTip(plan.duration_days),
             });
         }
 

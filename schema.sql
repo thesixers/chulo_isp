@@ -82,8 +82,10 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     status subscription_status DEFAULT 'active',
     start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expiry_time TIMESTAMP,
-    data_used_mb INTEGER DEFAULT 0
+    data_used_mb INTEGER DEFAULT 0,
+    alert_sent BOOLEAN DEFAULT false
 );
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS alert_sent BOOLEAN DEFAULT false;
 
 -- Session state for WhatsApp conversational flow
 CREATE TABLE IF NOT EXISTS whatsapp_sessions (

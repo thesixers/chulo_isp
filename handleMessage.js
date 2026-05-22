@@ -130,6 +130,24 @@ function buildWelcomeMessage(name = 'there') {
     );
 }
 
+function buildAdminWelcomeMessage(name = 'Admin') {
+    return (
+        `👋 *Hi ${name}!* 🛡️ *Chulo Speednet Admin*\n\n` +
+        `*📱 User Options:*\n` +
+        `1️⃣  📡 Buy a Data Plan\n` +
+        `2️⃣  🔑 Change Password\n` +
+        `3️⃣  👤 Change Username\n` +
+        `4️⃣  📋 Check Sub Duration Left\n` +
+        `5️⃣  🕓 Subscription History\n` +
+        `6️⃣  💳 Payment History\n` +
+        `7️⃣  📞 Contact Support\n\n` +
+        `*🛠️ Admin Commands:*\n` +
+        `\`!stats\`  •  \`!users [page]\`  •  \`!payments [page]\`\n` +
+        `\`!user <phone>\`  •  \`!broadcast <msg>\`\n\n` +
+        `Reply with a number (1–7) or an admin command.`
+    );
+}
+
 const NUM_WORDS = {
     '1': 'One', '2': 'Two', '3': 'Three', '4': 'Four', '5': 'Five',
     '6': 'Six', '7': 'Seven', '8': 'Eight', '9': 'Nine',
@@ -190,8 +208,7 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
     const user    = await upsertUser(db, phone, pushName);
     const session = await getSession(db, phone);
     const firstName = (user.name || pushName || 'there').split(' ')[0];
-
-    console.log("ADMIN_PHONES", ADMIN_PHONES);
+    
 
     // Admin gate — match against PN phone number, works regardless of LID/PN JID type
     if (ADMIN_PHONES.includes(pnPhone)) {
@@ -202,7 +219,10 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
     // Universal reset — hi / hello / menu
     if (['hi', 'hello', 'menu'].includes(msgLower)) {
         await updateSession(db, phone, 'awaiting_service_selection', null, from);
-        await sock.sendMessage(from, { text: buildWelcomeMessage(firstName) });
+        const welcomeText = ADMIN_PHONES.includes(pnPhone)
+            ? buildAdminWelcomeMessage(firstName)
+            : buildWelcomeMessage(firstName);
+        await sock.sendMessage(from, { text: welcomeText });
         return;
     }
 

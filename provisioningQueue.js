@@ -1,4 +1,4 @@
-import { provisionHotspotUser } from './mikrotik.js';
+import { provisionHotspotUser, buildMikrotikComment } from './mikrotik.js';
 
 // Retry backoff schedule (minutes per attempt index)
 const BACKOFF_MINUTES = [2, 5, 10, 15, 30, 60, 60, 60, 60, 60];
@@ -50,7 +50,18 @@ async function processJob(db, sock, job) {
     `, [attempt, job.id]);
 
     try {
-        await provisionHotspotUser(job.phone, job.mikrotik_profile, job.pin);
+        // Look up active subscription for comment field
+        const subRes = await db.query(`
+            SELECT s.expiry_time, pl.duration_days
+            FROM subscriptions s
+            JOIN plans pl ON pl.id = s.plan_id
+            WHERE s.user_id = $1 AND s.status = 'active'
+            ORDER BY s.created_at DESC LIMIT 1
+        `, [job.user_id]);
+        const sub     = subRes.rows[0];
+        const comment = sub ? buildMikrotikComment(sub.duration_days, sub.expiry_time) : null;
+
+        await provisionHotspotUser(job.phone, job.mikrotik_profile, job.pin, comment);
 
         // ✅ Success — mark complete and notify user
         await db.query(`
