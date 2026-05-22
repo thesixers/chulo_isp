@@ -191,6 +191,7 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
     console.log("pnJid", pnJid);
     console.log("phone", phone);
     console.log("pnPhone", pnPhone);
+    console.log("ADMIN_PHONES", ADMIN_PHONES);
 
     const user    = await upsertUser(db, phone, pushName);
     const session = await getSession(db, phone);

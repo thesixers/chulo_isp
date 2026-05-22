@@ -88,9 +88,15 @@ app.post("/webhook/flutterwave", async (req, res) => {
     const event = req.body;
     console.log("🔔 FLW Webhook received:", JSON.stringify(event, null, 2));
 
-    // v3 bank transfer webhook: flat payload, event type in "event.type" key
-    if (event["event.type"] === 'BANK_TRANSFER_TRANSACTION' && event.status === 'successful') {
-        const txRef = event.txRef;
+    // v3 bank transfer webhook: status and tx_ref are inside event.data
+    const data = event.data || {};
+    if (event["event.type"] === 'BANK_TRANSFER_TRANSACTION' && data.status === 'successful') {
+        const txRef = data.tx_ref;
+
+        if (!txRef) {
+            req.log.error("Webhook: missing tx_ref in event.data");
+            return;
+        }
 
         try {
             const paymentRes = await db.query(`
