@@ -113,37 +113,47 @@ async function getPaymentHistory(db, userId) {
 
 function buildWelcomeMessage(name = 'there') {
     return (
-        `👋 *Hi ${name}, welcome to Chulo ISP!*\n` +
+        `👋 *Hi ${name}, welcome to Chulo Speednet!*\n` +
         `Your trusted Starlink internet provider.\n\n` +
         `How can we help you today?\n\n` +
         `1️⃣  📡 Buy a Data Plan\n` +
-        `2️⃣  🔑 Manage Account\n` +
-        `3️⃣  📋 Check My Subscription\n` +
-        `4️⃣  🕓 Subscription History\n` +
-        `5️⃣  💳 Payment History\n` +
-        `6️⃣  📞 Contact Support\n\n` +
-        `Reply with a number (1–6).`
+        `2️⃣  🔑 Change Password\n` +
+        `3️⃣  👤 Change Username\n` +
+        `4️⃣  📋 Check Sub Duration Left\n` +
+        `5️⃣  🕓 Subscription History\n` +
+        `6️⃣  💳 Payment History\n` +
+        `7️⃣  📞 Contact Support\n\n` +
+        `Reply with a number (1–7).`
     );
 }
 
-function buildPlanMenu(plans) {
-    const tiers = [
-        { label: '📱 *Single Device*',     profile: '7/7_Mbps_1Users' },
-        { label: '📱📱 *Two Devices*',     profile: '7/7_Mbps_2Users' },
-        { label: '📱📱📱 *Three Devices*', profile: 'for three users'  },
-    ];
+const NUM_WORDS = {
+    '1': 'One', '2': 'Two', '3': 'Three', '4': 'Four', '5': 'Five',
+    '6': 'Six', '7': 'Seven', '8': 'Eight', '9': 'Nine',
+};
 
-    let text = `📡 *Choose a Data Plan*\n`;
-    for (const tier of tiers) {
-        const tierPlans = plans.filter(p => p.mikrotik_profile === tier.profile);
-        if (!tierPlans.length) continue;
-        text += `\n${tier.label}\n`;
-        text += tierPlans.map(p =>
-            `  ${p.id}. ${p.name.split(' - ')[0]} — ₦${Number(p.price).toLocaleString()}`
-        ).join('\n');
-        text += '\n';
-    }
-    text += `\nReply with the plan number, or *0* to go back.`;
+// Strips device-count suffix and spells out leading number
+// e.g. "1 Month - Single Device" → "One Month"
+function spellPlanName(name) {
+    const stripped = name.replace(/\s*[-–]\s*(Single Device|Two Devices|Three Devices)$/i, '').trim();
+    return stripped.replace(/^(\d+)/, (_, n) => NUM_WORDS[n] || n);
+}
+
+function buildDeviceMenu() {
+    return (
+        `📱 *How many devices will connect?*\n\n` +
+        `1️⃣  Single Device\n` +
+        `2️⃣  Two Devices\n\n` +
+        `Reply *1* or *2*, or *0* to go back.`
+    );
+}
+
+function buildFilteredPlanMenu(plans, label) {
+    let text = `📡 *${label} Plans*\n\n`;
+    text += plans.map(p =>
+        `${p.id}. ${spellPlanName(p.name)} — ₦${Number(p.price).toLocaleString()}`
+    ).join('\n');
+    text += `\n\nReply with the plan number, or *0* to go back.`;
     return text;
 }
 
@@ -187,39 +197,59 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
 
                 // ── 1. Buy a Data Plan ──────────────────────────────────
                 case '1': {
-                    await updateSession(db, phone, 'awaiting_plan_selection', null, from);
-                    const plans = await getAllPlans(db);
-                    await sock.sendMessage(from, { text: buildPlanMenu(plans) });
+                    await updateSession(db, phone, 'awaiting_device_selection', null, from);
+                    await sock.sendMessage(from, { text: buildDeviceMenu() });
                     break;
                 }
 
-                // ── 2. Manage Hotspot Account ───────────────────────────
+                // ── 2. Change Password ──────────────────────────────────
                 case '2': {
                     const sub = await getActiveSubscription(db, user.id);
                     if (!sub) {
                         await sock.sendMessage(from, {
                             text:
                                 `❌ *No Active Subscription*\n\n` +
-                                `You need an active plan to manage your hotspot account.\n\n` +
+                                `You need an active plan to change your password.\n\n` +
                                 `Reply *1* to buy a plan or *HI* for the main menu.`,
                         });
                         break;
                     }
-
-                    await updateSession(db, phone, 'awaiting_manage_account', null, from);
+                    await updateSession(db, phone, 'awaiting_new_password', null, from);
                     await sock.sendMessage(from, {
                         text:
-                            `🔧 *Manage Hotspot Account*\n\n` +
-                            `What would you like to do?\n\n` +
-                            `A. 🔑 Change Password\n` +
-                            `B. 👤 Change Username\n\n` +
-                            `Reply *A* or *B*, or *0* to go back.`,
+                            `🔑 *Change Password*\n\n` +
+                            `Current username: \`${user.hotspot_username || phone}\`\n\n` +
+                            `Enter your new password (6–50 characters):\n` +
+                            `Reply *0* to cancel.`,
                     });
                     break;
                 }
 
-                // ── 3. Check My Subscription ────────────────────────────
+                // ── 3. Change Username ──────────────────────────────────
                 case '3': {
+                    const sub = await getActiveSubscription(db, user.id);
+                    if (!sub) {
+                        await sock.sendMessage(from, {
+                            text:
+                                `❌ *No Active Subscription*\n\n` +
+                                `You need an active plan to change your username.\n\n` +
+                                `Reply *1* to buy a plan or *HI* for the main menu.`,
+                        });
+                        break;
+                    }
+                    await updateSession(db, phone, 'awaiting_new_username', null, from);
+                    await sock.sendMessage(from, {
+                        text:
+                            `👤 *Change Username*\n\n` +
+                            `Current username: \`${user.hotspot_username || phone}\`\n\n` +
+                            `Choose a new username (letters/numbers/underscore, 3–20 chars):\n` +
+                            `Reply *0* to cancel.`,
+                    });
+                    break;
+                }
+
+                // ── 4. Check Sub Duration Left ──────────────────────────
+                case '4': {
                     const sub = await getActiveSubscription(db, user.id);
                     if (!sub) {
                         await sock.sendMessage(from, {
@@ -255,8 +285,8 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
                     break;
                 }
 
-                // ── 4. Subscription History ─────────────────────────────
-                case '4': {
+                // ── 5. Subscription History ─────────────────────────────
+                case '5': {
                     const history = await getSubscriptionHistory(db, user.id);
                     if (!history.length) {
                         await sock.sendMessage(from, {
@@ -285,8 +315,8 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
                     break;
                 }
 
-                // ── 5. Payment History ──────────────────────────────────
-                case '5': {
+                // ── 6. Payment History ──────────────────────────────────
+                case '6': {
                     const payments = await db.query(`
                         SELECT amount, status, paid_at, created_at
                         FROM payments
@@ -322,15 +352,15 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
                     break;
                 }
 
-                // ── 6. Contact Support ──────────────────────────────────
-                case '6': {
+                // ── 7. Contact Support ──────────────────────────────────
+                case '7': {
                     await sock.sendMessage(from, {
                         text:
-                            `📞 *Chulo ISP Support*\n\n` +
+                            `📞 *Chulo Speednet Support*\n\n` +
                             `We're here to help! Reach us via:\n\n` +
                             `💬 WhatsApp: This chat\n` +
-                            `📧 Email: support@chuloisp.com\n` +
-                            `⏰ Hours: *Mon–Sat, 8am–8pm*\n\n` +
+                            `📞 Phone Number: +2348112677404\n` +
+                            `⏰ Hours: *Mon–Sun, 8am–9pm*\n\n` +
                             `Describe your issue and our team will respond shortly.\n\n` +
                             `Reply *HI* to return to the main menu.`,
                     });
@@ -340,8 +370,34 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
 
                 default:
                     await sock.sendMessage(from, {
-                        text: `Please reply with a number between *1 and 6*, or send *HI* to see the menu again.`,
+                        text: `Please reply with a number between *1 and 7*, or send *HI* to see the menu again.`,
                     });
+            }
+            break;
+        }
+
+
+
+        // ──────────────────────────────────────────────────────────────────
+        // BUY PLAN — Step 0: pick number of devices
+        // ──────────────────────────────────────────────────────────────────
+        case 'awaiting_device_selection': {
+            if (message === '1') {
+                const res = await db.query(
+                    `SELECT * FROM plans WHERE mikrotik_profile = '7/7_Mbps_1Users' ORDER BY duration_days DESC`
+                );
+                await updateSession(db, phone, 'awaiting_plan_selection', null, from);
+                await sock.sendMessage(from, { text: buildFilteredPlanMenu(res.rows, 'Single Device') });
+            } else if (message === '2') {
+                const res = await db.query(
+                    `SELECT * FROM plans WHERE mikrotik_profile = '7/7_Mbps_2Users' ORDER BY duration_days DESC`
+                );
+                await updateSession(db, phone, 'awaiting_plan_selection', null, from);
+                await sock.sendMessage(from, { text: buildFilteredPlanMenu(res.rows, 'Two Devices') });
+            } else {
+                await sock.sendMessage(from, {
+                    text: `Please reply *1* for Single Device or *2* for Two Devices, or *0* to go back.`,
+                });
             }
             break;
         }

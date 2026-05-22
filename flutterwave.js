@@ -22,7 +22,7 @@ const flw = axios.create({
  * @param {number} expiryMinutes    - How long the account stays active (default: 60 min)
  * @returns {Promise<{ txRef: string, accountNumber: string, bankName: string }>}
  */
-export async function createDynamicVirtualAccount(phone, amount, planName, expiryMinutes = 60) {
+export async function createDynamicVirtualAccount(phone, amount, planName) {
     const txRef = uuidv4(); // this is stored in payments table for webhook lookup
     const email = `${phone}@chuloisp.local`;
 
@@ -37,8 +37,7 @@ export async function createDynamicVirtualAccount(phone, amount, planName, expir
             phonenumber: phone,
             firstname: 'Chulo',
             lastname: 'User',
-            duration: expiryMinutes,
-            frequency: 1,
+            frequency: 1,   // single-use: expires after one successful payment
         });
 
         const data = response.data.data;

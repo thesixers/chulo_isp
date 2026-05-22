@@ -21,7 +21,8 @@ DO $$ BEGIN
         'awaiting_hotspot_username',
         'awaiting_hotspot_password',
         'awaiting_new_username',
-        'awaiting_new_password'
+        'awaiting_new_password',
+        'awaiting_device_selection'
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -32,6 +33,7 @@ DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_hotspot_u
 DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_hotspot_password'; EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_new_username'; EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_new_password'; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_device_selection'; EXCEPTION WHEN others THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
