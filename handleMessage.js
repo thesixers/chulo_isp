@@ -191,6 +191,8 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
     const session = await getSession(db, phone);
     const firstName = (user.name || pushName || 'there').split(' ')[0];
 
+    console.log("ADMIN_PHONES", ADMIN_PHONES);
+
     // Admin gate — match against PN phone number, works regardless of LID/PN JID type
     if (ADMIN_PHONES.includes(pnPhone)) {
         const handled = await handleAdminMessage(sock, from, text, db);
