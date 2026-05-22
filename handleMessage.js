@@ -1,6 +1,9 @@
 import { createDynamicVirtualAccount } from './flutterwave.js';
 import { fulfillPayment, provisionOrQueue } from './fulfillPayment.js';
 import { provisionHotspotUser } from './mikrotik.js';
+import { handleAdminMessage } from './adminHandler.js';
+
+const ADMIN_PHONES = (process.env.ADMIN_PHONE || '').split(',').map(p => p.trim().replace(/^\+/, ''));
 
 function sanitizeUsername(input) {
     // Strip emojis and special chars — keep only alphanumeric and underscore
@@ -12,7 +15,7 @@ function isValidUsername(s) {
 }
 
 function isValidPassword(s) {
-    return s.length >= 6 && s.length <= 50;
+    return /^\d{4}$/.test(s); // exactly 4 digits
 }
 
 // ---------------------------------------------------------
@@ -178,6 +181,12 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
     const session = await getSession(db, phone);
     const firstName = (user.name || pushName || 'there').split(' ')[0];
 
+    // Admin gate — if sender is a configured admin, check for !commands first
+    if (ADMIN_PHONES.includes(phone)) {
+        const handled = await handleAdminMessage(sock, from, text, db);
+        if (handled) return; // admin command consumed — skip normal user flow
+    }
+
     // Universal reset — hi / hello / menu / 0
     if (['hi', 'hello', 'menu', '0'].includes(msgLower)) {
         await updateSession(db, phone, 'awaiting_service_selection', null, from);
@@ -219,7 +228,7 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
                         text:
                             `🔑 *Change Password*\n\n` +
                             `Current username: \`${user.hotspot_username || phone}\`\n\n` +
-                            `Enter your new password (6–50 characters):\n` +
+                            `Enter your new *4-digit PIN* (numbers only):\n` +
                             `Reply *0* to cancel.`,
                     });
                     break;
@@ -522,7 +531,7 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
                     text:
                         `🔑 *Change Password*\n\n` +
                         `Current username: \`${user.hotspot_username || phone}\`\n\n` +
-                        `Please enter your new password (min 6 characters):\n` +
+                        `Please enter your new *4-digit PIN* (numbers only):\n` +
                         `Reply *0* to cancel.`,
                 });
             } else if (msgLower === 'b') {
@@ -563,7 +572,7 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
             await sock.sendMessage(from, {
                 text:
                     `✅ Username *${raw}* saved!\n\n` +
-                    `Now choose a *password* (minimum 6 characters):\n` +
+                    `Now choose a *4-digit PIN* (numbers only):\n` +
                     `Example: \`mysecret99\`\n\nReply with your password:`,
             });
             break;
@@ -575,7 +584,7 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
         case 'awaiting_hotspot_password': {
             if (!isValidPassword(message)) {
                 await sock.sendMessage(from, {
-                    text: `❌ Password must be *6–50 characters*. Please try again:`,
+                    text: `❌ PIN must be exactly *4 digits* (e.g. 1234). Please try again:`,
                 });
                 break;
             }
@@ -624,7 +633,7 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
                 await sock.sendMessage(from, {
                     text:
                         `✅ Username *${raw}* saved!\n\n` +
-                        `You don't have a password set yet. Please choose one now (6–50 characters):\n\n` +
+                        `You don't have a PIN set yet. Please choose a *4-digit PIN* (numbers only):\n\n` +
                         `Reply *0* to cancel.`,
                 });
                 break;
@@ -685,7 +694,7 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
 
             if (!isValidPassword(message)) {
                 await sock.sendMessage(from, {
-                    text: `❌ Password must be 6–50 characters. Try again or reply *0* to cancel:`,
+                    text: `❌ PIN must be exactly *4 digits* (e.g. 5678). Try again or reply *0* to cancel:`,
                 });
                 break;
             }
