@@ -30,12 +30,12 @@ async function seed() {
             ('3 Days - Two Devices',     2200,  3, '7/7_Mbps_2Users'),
             ('1 Day - Two Devices',      1300,  1, '7/7_Mbps_2Users'),
 
-            -- Three devices (for three users)
-            ('1 Month - Three Devices', 21000, 30, 'for three users'),
-            ('2 Weeks - Three Devices', 12000, 14, 'for three users'),
-            ('1 Week - Three Devices',   6000,  7, 'for three users'),
-            ('3 Days - Three Devices',   3300,  3, 'for three users'),
-            ('1 Day - Three Devices',    2000,  1, 'for three users')
+            -- Three devices (7/7_Mbps_3Users)
+            ('1 Month - Three Devices', 21000, 30, '7/7_Mbps_3Users'),
+            ('2 Weeks - Three Devices', 12000, 14, '7/7_Mbps_3Users'),
+            ('1 Week - Three Devices',   6000,  7, '7/7_Mbps_3Users'),
+            ('3 Days - Three Devices',   3300,  3, '7/7_Mbps_3Users'),
+            ('1 Day - Three Devices',    2000,  1, '7/7_Mbps_3Users')
         `);
 
         console.log("✅ Plans seeded successfully!");

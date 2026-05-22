@@ -146,8 +146,9 @@ function buildDeviceMenu() {
     return (
         `📱 *How many devices will connect?*\n\n` +
         `1️⃣  Single Device\n` +
-        `2️⃣  Two Devices\n\n` +
-        `Reply *1* or *2*, or *0* to go back.`
+        `2️⃣  Two Devices\n` +
+        `3️⃣  Three Devices\n\n` +
+        `Reply *1*, *2*, or *3*, or *0* to go back.`
     );
 }
 
@@ -187,12 +188,24 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
         if (handled) return; // admin command consumed — skip normal user flow
     }
 
-    // Universal reset — hi / hello / menu / 0
-    if (['hi', 'hello', 'menu', '0'].includes(msgLower)) {
+    // Universal reset — hi / hello / menu
+    if (['hi', 'hello', 'menu'].includes(msgLower)) {
         await updateSession(db, phone, 'awaiting_service_selection', null, from);
-        await sock.sendMessage(from, {
-            text: buildWelcomeMessage(firstName),
-        });
+        await sock.sendMessage(from, { text: buildWelcomeMessage(firstName) });
+        return;
+    }
+
+    // Context-aware back: '0' goes to the previous logical step
+    if (msgLower === '0') {
+        if (session.state === 'awaiting_plan_selection') {
+            // Back from plan list → device selection
+            await updateSession(db, phone, 'awaiting_device_selection', null, from);
+            await sock.sendMessage(from, { text: buildDeviceMenu() });
+        } else {
+            // Everywhere else → main menu
+            await updateSession(db, phone, 'awaiting_service_selection', null, from);
+            await sock.sendMessage(from, { text: buildWelcomeMessage(firstName) });
+        }
         return;
     }
 
@@ -403,9 +416,15 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
                 );
                 await updateSession(db, phone, 'awaiting_plan_selection', null, from);
                 await sock.sendMessage(from, { text: buildFilteredPlanMenu(res.rows, 'Two Devices') });
+            } else if (message === '3') {
+                const res = await db.query(
+                    `SELECT * FROM plans WHERE mikrotik_profile = '7/7_Mbps_3Users' ORDER BY duration_days DESC`
+                );
+                await updateSession(db, phone, 'awaiting_plan_selection', null, from);
+                await sock.sendMessage(from, { text: buildFilteredPlanMenu(res.rows, 'Three Devices') });
             } else {
                 await sock.sendMessage(from, {
-                    text: `Please reply *1* for Single Device or *2* for Two Devices, or *0* to go back.`,
+                    text: `Please reply *1* for Single, *2* for Two, or *3* for Three Devices, or *0* to go back.`,
                 });
             }
             break;
