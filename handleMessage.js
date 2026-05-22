@@ -561,6 +561,19 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
             const sub     = await getActiveSubscription(db, user.id);
             const oldUser = user.hotspot_username || phone;
 
+            // If no password is set yet, save username and ask for password first
+            if (!user.hotspot_password) {
+                await db.query(`UPDATE users SET hotspot_username = $1 WHERE id = $2`, [raw, user.id]);
+                await updateSession(db, phone, 'awaiting_new_password', null, from);
+                await sock.sendMessage(from, {
+                    text:
+                        `✅ Username *${raw}* saved!\n\n` +
+                        `You don't have a password set yet. Please choose one now (6–50 characters):\n\n` +
+                        `Reply *0* to cancel.`,
+                });
+                break;
+            }
+
             await sock.sendMessage(from, { text: `⏳ Updating your username to *${raw}*...` });
 
             try {
