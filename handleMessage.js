@@ -117,7 +117,7 @@ function buildWelcomeMessage(name = 'there') {
         `Your trusted Starlink internet provider.\n\n` +
         `How can we help you today?\n\n` +
         `1️⃣  📡 Buy a Data Plan\n` +
-        `2️⃣  🔑 Reset Hotspot Password\n` +
+        `2️⃣  🔑 Manage Account\n` +
         `3️⃣  📋 Check My Subscription\n` +
         `4️⃣  🕓 Subscription History\n` +
         `5️⃣  💳 Payment History\n` +
