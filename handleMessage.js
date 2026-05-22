@@ -206,7 +206,7 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
                         break;
                     }
 
-                    await updateSession(db, phone, 'awaiting_service_selection', null, from);
+                    await updateSession(db, phone, 'awaiting_manage_account', null, from);
                     await sock.sendMessage(from, {
                         text:
                             `🔧 *Manage Hotspot Account*\n\n` +
@@ -215,9 +215,6 @@ export async function handleMessage(sock, from, text, pushName = null, db) {
                             `B. 👤 Change Username\n\n` +
                             `Reply *A* or *B*, or *0* to go back.`,
                     });
-
-                    // Reuse awaiting_service_selection but intercept A/B below
-                    await updateSession(db, phone, 'awaiting_manage_account', null, from);
                     break;
                 }
 
