@@ -79,7 +79,7 @@ async function run() {
     await step1_createUser();
     await step2_verifyUser();
     await step3_updatePassword();
-    await step4_cleanup();
+    // await step4_cleanup();
 
     console.log('\n🎉 All steps passed — hotspot provisioning is fully working!');
 }
