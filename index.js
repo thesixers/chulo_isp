@@ -46,7 +46,7 @@ let globalSock = null;
 
 async function startBot() {
     globalSock = await connectToWhatsApp(
-        (sock, from, text, pushName) => handleMessage(sock, from, text, pushName, db),
+        (sock, from, pnJid, text, pushName) => handleMessage(sock, from, pnJid, text, pushName, db),
         (newSock) => {
             globalSock = newSock;
             console.log("🔄 globalSock updated to live WhatsApp socket");

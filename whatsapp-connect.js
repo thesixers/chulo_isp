@@ -1,6 +1,6 @@
 import makeWASocket, {
     useMultiFileAuthState,
-    DisconnectReason
+    DisconnectReason,
 } from "@whiskeysockets/baileys";
 
 import pino from "pino";
@@ -49,8 +49,18 @@ export async function connectToWhatsApp(onMessage, onReconnect) {
         // Ignore messages sent by the bot itself
         if (msg.key.fromMe) return;
 
-        // Ignore group messages — only handle direct (private) chats
-        if (msg.key.remoteJid.endsWith('@g.us')) return;
+        const jid = msg.key.remoteJid;
+
+        // Reject groups, broadcasts, newsletters, status
+        if (
+            jid.endsWith('@g.us') ||
+            jid.endsWith('@broadcast') ||
+            jid.endsWith('@newsletter') ||
+            jid === 'status@broadcast'
+        ) return;
+
+        // Only accept direct DMs — PN (@s.whatsapp.net) or LID (@lid)
+        if (!jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@lid')) return;
 
         if (!msg.message) return;
 
@@ -58,11 +68,20 @@ export async function connectToWhatsApp(onMessage, onReconnect) {
             msg.message.conversation ||
             msg.message.extendedTextMessage?.text;
 
-        const from     = msg.key.remoteJid;
+        if (!text) return;
+
+        // from  = the JID we reply to (could be LID or PN — use as-is)
+        // pnJid = the phone-number JID for DB phone extraction
+        //         if primary JID is LID, remoteJidAlt should be the PN JID
+        const from  = jid;
+        const pnJid = jid.endsWith('@s.whatsapp.net')
+            ? jid
+            : (msg.key.remoteJidAlt || jid); // fall back to LID if no alt available
+
         const pushName = msg.pushName || null; // WhatsApp display name
 
-        await onMessage(sock, from, text, pushName);
+        await onMessage(sock, from, pnJid, text, pushName);
     });
 
     return sock;
-}
+}

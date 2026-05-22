@@ -9,46 +9,63 @@ const flw = axios.create({
     },
 });
 
+const RETRY_STATUSES = new Set([502, 503, 504]);
+const RETRY_ATTEMPTS  = 3;
+const RETRY_DELAY_MS  = 5000;
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+
 /**
  * Creates a dynamic (temporary) virtual account for a specific transaction.
  * Uses the Flutterwave v3 API — no separate customer creation needed.
  *
- * Dynamic accounts expire after `expiryMinutes` and are tied to an exact amount.
- * BVN is NOT required for dynamic/temporary accounts.
+ * Automatically retries up to 3 times on 502/503/504 (gateway errors).
  *
- * @param {string} phone            - User's phone number
- * @param {number} amount           - Exact plan price the customer must pay
- * @param {string} planName         - Plan name for narration (e.g. "Daily Plan")
- * @param {number} expiryMinutes    - How long the account stays active (default: 60 min)
+ * @param {string} phone     - User's phone number
+ * @param {number} amount    - Exact plan price the customer must pay
+ * @param {string} planName  - Plan name for narration (e.g. "Daily Plan")
  * @returns {Promise<{ txRef: string, accountNumber: string, bankName: string }>}
  */
 export async function createDynamicVirtualAccount(phone, amount, planName) {
-    const txRef = uuidv4(); // this is stored in payments table for webhook lookup
+    const txRef = uuidv4(); // generated once — consistent across retries
     const email = `${phone}@chuloisp.local`;
 
-    try {
-        const response = await flw.post('/virtual-account-numbers', {
-            email,
-            is_permanent: false,
-            tx_ref: txRef,
-            amount,
-            currency: 'NGN',
-            narration: `Chulo ISP - ${planName}`,
-            phonenumber: phone,
-            firstname: 'Chulo',
-            lastname: 'User',
-            frequency: 1,   // single-use: expires after one successful payment
-        });
+    let lastError;
+    for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+        try {
+            const response = await flw.post('/virtual-account-numbers', {
+                email,
+                is_permanent: false,
+                tx_ref: txRef,
+                amount,
+                currency: 'NGN',
+                narration: `Chulo ISP - ${planName}`,
+                phonenumber: phone,
+                firstname: 'Chulo',
+                lastname: 'User',
+                frequency: 1,   // single-use: expires after one successful payment
+            });
 
-        const data = response.data.data;
+            const data = response.data.data;
+            return {
+                txRef,
+                accountNumber: data.account_number,
+                bankName: data.bank_name,
+            };
+        } catch (error) {
+            const status = error.response?.status;
+            lastError = error;
 
-        return {
-            txRef,                              // stored in payments.virtual_account_reference
-            accountNumber: data.account_number,
-            bankName: data.bank_name,
-        };
-    } catch (error) {
-        console.error('Flutterwave v3 Virtual Account Error:', error.response?.data || error.message);
-        throw error;
+            if (RETRY_STATUSES.has(status) && attempt < RETRY_ATTEMPTS) {
+                console.warn(`Flutterwave ${status} on attempt ${attempt}/${RETRY_ATTEMPTS} — retrying in ${RETRY_DELAY_MS / 1000}s...`);
+                await sleep(RETRY_DELAY_MS);
+                continue;
+            }
+
+            console.error('Flutterwave Virtual Account Error:', error.response?.data || error.message);
+            break;
+        }
     }
+    throw lastError;
 }

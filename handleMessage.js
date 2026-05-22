@@ -173,19 +173,26 @@ function fmt(date) {
 // MAIN HANDLER
 // ---------------------------------------------------------
 
-export async function handleMessage(sock, from, text, pushName = null, db) {
+export async function handleMessage(sock, from, pnJid, text, pushName = null, db) {
     if (!text) return;
+
+    // Only handle PN (@s.whatsapp.net) and LID (@lid) — everything else was filtered upstream
+    if (!from.endsWith('@s.whatsapp.net') && !from.endsWith('@lid')) return;
 
     const message  = text.trim();
     const msgLower = message.toLowerCase();
-    const phone    = from.split('@')[0];
+
+    // Always extract the phone from the PN JID so it's a real phone number,
+    // not a LID number — pnJid is @s.whatsapp.net if available, @lid as fallback
+    const phone    = pnJid.split('@')[0];
+    const pnPhone  = phone; // alias for clarity in admin check
 
     const user    = await upsertUser(db, phone, pushName);
     const session = await getSession(db, phone);
     const firstName = (user.name || pushName || 'there').split(' ')[0];
 
-    // Admin gate — if sender is a configured admin, check for !commands first
-    if (ADMIN_PHONES.includes(phone)) {
+    // Admin gate — match against PN phone number, works regardless of LID/PN JID type
+    if (ADMIN_PHONES.includes(pnPhone)) {
         const handled = await handleAdminMessage(sock, from, text, db);
         if (handled) return; // admin command consumed — skip normal user flow
     }
