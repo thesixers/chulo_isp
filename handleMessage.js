@@ -1,17 +1,17 @@
 import { createDynamicVirtualAccount } from './flutterwave.js';
 import { fulfillPayment, provisionOrQueue } from './fulfillPayment.js';
-import { provisionHotspotUser } from './mikrotik.js';
+import { provisionHotspotUser, buildMikrotikComment } from './mikrotik.js';
 import { handleAdminMessage } from './adminHandler.js';
 
 const ADMIN_PHONES = (process.env.ADMIN_PHONE || '').split(',').map(p => p.trim().replace(/^\+/, ''));
 
 function sanitizeUsername(input) {
-    // Strip emojis and special chars — keep only alphanumeric and underscore
-    return input.replace(/[^\w]/g, '').toLowerCase().trim();
+    // Strip emojis and special chars — keep only alphanumeric and underscore (preserve case)
+    return input.replace(/[^\w]/g, '').trim();
 }
 
 function isValidUsername(s) {
-    return /^[a-z0-9_]{3,20}$/.test(s);
+    return /^[a-zA-Z0-9_]{3,20}$/.test(s);
 }
 
 function isValidPassword(s) {
@@ -76,7 +76,7 @@ async function getAllPlans(db) {
 
 async function getActiveSubscription(db, userId) {
     const res = await db.query(`
-        SELECT s.*, p.name AS plan_name, p.mikrotik_profile
+        SELECT s.*, p.name AS plan_name, p.mikrotik_profile, p.duration_days
         FROM subscriptions s
         JOIN plans p ON p.id = s.plan_id
         WHERE s.user_id = $1 AND s.status = 'active' AND s.expiry_time > CURRENT_TIMESTAMP
@@ -615,6 +615,18 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
                 break;
             }
 
+            // Check if username is already taken (case-insensitively)
+            const checkRes = await db.query(
+                `SELECT id FROM users WHERE LOWER(hotspot_username) = LOWER($1) AND id != $2`,
+                [raw, user.id]
+            );
+            if (checkRes.rowCount > 0) {
+                await sock.sendMessage(from, {
+                    text: `❌ The username *${raw}* is already taken. Please choose a different username:`,
+                });
+                break;
+            }
+
             // Save temp username in DB and ask for password
             await db.query(`UPDATE users SET hotspot_username = $1 WHERE id = $2`, [raw, user.id]);
             await updateSession(db, phone, 'awaiting_hotspot_password', session.plan_id, from);
@@ -652,7 +664,7 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
 
             // Fetch expiry for MikroTik comment (e.g. "1M 25 May 10pm")
             const subRes  = await db.query(
-                `SELECT expiry_time FROM subscriptions WHERE user_id = $1 AND status = 'active' ORDER BY created_at DESC LIMIT 1`,
+                `SELECT expiry_time FROM subscriptions WHERE user_id = $1 AND status = 'active' ORDER BY id DESC LIMIT 1`,
                 [user.id]
             );
             const expiryTime = subRes.rows[0]?.expiry_time || null;
@@ -679,7 +691,24 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
                 break;
             }
 
+            // Check if username is already taken (case-insensitively)
+            const checkRes = await db.query(
+                `SELECT id FROM users WHERE LOWER(hotspot_username) = LOWER($1) AND id != $2`,
+                [raw, user.id]
+            );
+            if (checkRes.rowCount > 0) {
+                await sock.sendMessage(from, {
+                    text: `❌ The username *${raw}* is already taken. Please choose a different username or reply *0* to cancel:`,
+                });
+                break;
+            }
+
             const sub     = await getActiveSubscription(db, user.id);
+            if (!sub) {
+                await sock.sendMessage(from, { text: `❌ Your subscription has expired or is inactive. Please buy a new plan to change your username.` });
+                await updateSession(db, phone, 'start');
+                break;
+            }
             const oldUser = user.hotspot_username || phone;
 
             // If no password is set yet, save username and ask for password first
@@ -698,8 +727,9 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
             await sock.sendMessage(from, { text: `⏳ Updating your username to *${raw}*...` });
 
             try {
-                // 1. Create the new username on MikroTik with the stored password
-                await provisionHotspotUser(raw, sub.mikrotik_profile, user.hotspot_password);
+                const comment = buildMikrotikComment(sub.duration_days, sub.expiry_time);
+                // 1. Create the new username on MikroTik with the stored password and comment
+                await provisionHotspotUser(raw, sub.mikrotik_profile, user.hotspot_password, comment);
 
                 // 2. Remove the old username from MikroTik
                 const { RouterOSAPI } = await import('node-routeros');
@@ -758,11 +788,17 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
             const newPass  = message;
             const username = user.hotspot_username || phone;
             const sub      = await getActiveSubscription(db, user.id);
+            if (!sub) {
+                await sock.sendMessage(from, { text: `❌ Your subscription has expired or is inactive. Please buy a new plan to change your password.` });
+                await updateSession(db, phone, 'start');
+                break;
+            }
 
             await sock.sendMessage(from, { text: `⏳ Updating your password...` });
 
             try {
-                await provisionHotspotUser(username, sub.mikrotik_profile, newPass);
+                const comment = buildMikrotikComment(sub.duration_days, sub.expiry_time);
+                await provisionHotspotUser(username, sub.mikrotik_profile, newPass, comment);
                 await db.query(`UPDATE users SET hotspot_password = $1 WHERE id = $2`, [newPass, user.id]);
                 await updateSession(db, phone, 'start');
 

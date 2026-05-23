@@ -56,7 +56,7 @@ async function processJob(db, sock, job) {
             FROM subscriptions s
             JOIN plans pl ON pl.id = s.plan_id
             WHERE s.user_id = $1 AND s.status = 'active'
-            ORDER BY s.created_at DESC LIMIT 1
+            ORDER BY s.id DESC LIMIT 1
         `, [job.user_id]);
         const sub     = subRes.rows[0];
         const comment = sub ? buildMikrotikComment(sub.duration_days, sub.expiry_time) : null;

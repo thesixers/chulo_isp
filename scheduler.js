@@ -78,7 +78,7 @@ async function sendExpiryAlerts(db, getSock) {
                     `⚠️ *Subscription Expiry Alert*\n\n` +
                     `Your *${sub.plan_name}* plan expires on *${fmt(sub.expiry_time)}* ` +
                     `(~${Math.ceil(daysLeft)} day${Math.ceil(daysLeft) !== 1 ? 's' : ''} left).\n\n` +
-                    `🎁 *Renew before it expires and get 1 FREE day added!*\n\n` +
+                    `🎁 *Renew before it expires and get 3 FREE days added!*\n\n` +
                     `Reply *1* to renew now or *HI* for the main menu.`;
 
             } else if (sub.duration_days >= 7 && sub.duration_days < 30 && daysLeft <= 1 && daysLeft > 0) {
@@ -94,6 +94,7 @@ async function sendExpiryAlerts(db, getSock) {
                 message =
                     `⚠️ *Subscription Expiry Alert*\n\n` +
                     `Your *${sub.plan_name}* plan expires *tomorrow* (${fmt(sub.expiry_time)}).\n\n` +
+                    `🎁 *Renew before it expires and get 1 FREE day added!*\n\n` +
                     `Reply *1* to renew now or *HI* for the main menu.`;
             }
             // duration_days === 1: no alert
