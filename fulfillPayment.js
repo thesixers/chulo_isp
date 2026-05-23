@@ -129,7 +129,8 @@ export async function fulfillPayment(db, sock, user) {
 }
 
 /**
- * Provisions the user on MikroTik or queues for retry on failure.
+ * Returns a loyalty promo tip message based on plan duration.
+ * Shown in payment confirmation and provisioning success messages.
  */
 function promoTip(durationDays) {
     if (durationDays >= 28) return '\n\n🎁 *Tip: Renew before your plan expires and get 3 FREE days added!*';
@@ -137,6 +138,9 @@ function promoTip(durationDays) {
     return '';
 }
 
+/**
+ * Provisions the user on MikroTik or queues for retry on failure.
+ */
 export async function provisionOrQueue(db, sock, user, plan, remoteJid, username, password, isRenewal, expiryTime = null) {
     try {
         const comment = expiryTime ? buildMikrotikComment(plan.duration_days, expiryTime) : null;

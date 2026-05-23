@@ -650,7 +650,14 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
             await updateSession(db, phone, 'start', null, from);
             await sock.sendMessage(from, { text: `⏳ Setting up your account as *${username}*...` });
 
-            await provisionOrQueue(db, sock, user, plan, from, username, pass, false);
+            // Fetch expiry for MikroTik comment (e.g. "1M 25 May 10pm")
+            const subRes  = await db.query(
+                `SELECT expiry_time FROM subscriptions WHERE user_id = $1 AND status = 'active' ORDER BY created_at DESC LIMIT 1`,
+                [user.id]
+            );
+            const expiryTime = subRes.rows[0]?.expiry_time || null;
+
+            await provisionOrQueue(db, sock, user, plan, from, username, pass, false, expiryTime);
             break;
         }
 
