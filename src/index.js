@@ -34,7 +34,7 @@ app.decorate("db", db);
 
 const setupDB = async () => {
     try {
-        const sql = fs.readFileSync("./schema.sql", "utf8");
+        const sql = fs.readFileSync("./db/schema.sql", "utf8");
         await db.query(sql);
         console.log("✅ Database Setup Complete!");
     } catch (err) {
