@@ -62,45 +62,72 @@ export async function fulfillPayment(db, sock, user) {
 
     // 4. Calculate subscription expiry (extend from current active sub if renewal)
     const activeSubRes = await db.query(`
-        SELECT * FROM subscriptions
-        WHERE user_id = $1 AND status = 'active' AND expiry_time > CURRENT_TIMESTAMP
-        ORDER BY expiry_time DESC LIMIT 1
+        SELECT s.*, p.mikrotik_profile FROM subscriptions s
+        JOIN plans p ON p.id = s.plan_id
+        WHERE s.user_id = $1 AND s.status = 'active' AND s.expiry_time > CURRENT_TIMESTAMP
+        ORDER BY s.expiry_time DESC LIMIT 1
     `, [user.id]);
 
-    const isRenewal = activeSubRes.rows.length > 0;
-    const renewingEarly = isRenewal && new Date(activeSubRes.rows[0].expiry_time) > new Date();
+    const activeSub = activeSubRes.rows[0];
+    const isRenewal = !!activeSub;
+    const isCrossProfile = isRenewal && activeSub.mikrotik_profile !== plan.mikrotik_profile;
+
+    const renewingEarly = isRenewal && new Date(activeSub.expiry_time) > new Date();
     // Loyalty bonus: monthly plans get 3 free days, weekly/3-day get 1 free day
     const bonusDays = renewingEarly ? (plan.duration_days >= 28 ? 3 : 1) : 0;
 
     let newExpiry = new Date();
-    if (isRenewal) newExpiry = new Date(activeSubRes.rows[0].expiry_time);
+    if (isRenewal) newExpiry = new Date(activeSub.expiry_time);
     newExpiry.setDate(newExpiry.getDate() + plan.duration_days + bonusDays);
-    const mikrotikComment = buildMikrotikComment(plan.duration_days, newExpiry);
 
-    // 5. Create the subscription record (reset alert_sent for fresh alert cycle)
-    await db.query(`
-        INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time, alert_sent)
-        VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3, false)
-    `, [user.id, plan.id, newExpiry]);
+    // 5. Create the subscription record
+    if (isCrossProfile) {
+        await db.query(`
+            INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time, alert_sent)
+            VALUES ($1, $2, 'queued', $3, $4, false)
+        `, [user.id, plan.id, activeSub.expiry_time, newExpiry]);
+    } else {
+        await db.query(`
+            INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time, alert_sent)
+            VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3, false)
+        `, [user.id, plan.id, newExpiry]);
+    }
 
     // 6. Send payment confirmation
-    console.log(`📤 Sending payment confirmation to ${remoteJid} (isRenewal=${isRenewal})`);
+    console.log(`📤 Sending payment confirmation to ${remoteJid} (isRenewal=${isRenewal}, isCrossProfile=${isCrossProfile})`);
     try {
-        await sock.sendMessage(remoteJid, {
-            text:
-                `✅ *Payment Confirmed!*\n\n` +
-                `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n` +
-                `📅 Expires: *${newExpiry.toDateString()}*` +
-                (renewingEarly ? `\n\n🎁 *+${bonusDays} free day${bonusDays > 1 ? 's' : ''} added* for renewing early! 🎉` : '') +
-                promoTip(plan.duration_days),
-        });
+        if (isCrossProfile) {
+            await sock.sendMessage(remoteJid, {
+                text:
+                    `✅ *Payment Confirmed!*\n\n` +
+                    `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n\n` +
+                    `⏳ *Plan Queued*\n` +
+                    `Your new plan will automatically activate exactly when your current plan expires on *${new Date(activeSub.expiry_time).toDateString()}*.\n` +
+                    (bonusDays > 0 ? `\n🎁 *+${bonusDays} free day${bonusDays > 1 ? 's' : ''} added* for renewing early! 🎉` : ''),
+            });
+        } else {
+            await sock.sendMessage(remoteJid, {
+                text:
+                    `✅ *Payment Confirmed!*\n\n` +
+                    `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n` +
+                    `📅 Expires: *${newExpiry.toDateString()}*` +
+                    (renewingEarly ? `\n\n🎁 *+${bonusDays} free day${bonusDays > 1 ? 's' : ''} added* for renewing early! 🎉` : '') +
+                    promoTip(plan.duration_days),
+            });
+        }
     } catch (msgErr) {
         console.error(`❌ Failed to send confirmation to ${remoteJid}:`, msgErr.message);
     }
 
-    // 7. Branch: renewal vs first-time
-    if (isRenewal && user.hotspot_username && user.hotspot_password) {
-        // ── RENEWAL: provision using stored credentials ──────────────────────
+    // 7. Branch: renewal vs first-time vs cross-profile
+    if (isCrossProfile) {
+        // ── CROSS-PROFILE: Do not provision on MikroTik yet. Reset session. ──
+        await db.query(
+            `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL WHERE phone = $1`,
+            [user.phone]
+        );
+    } else if (isRenewal && user.hotspot_username && user.hotspot_password) {
+        // ── RENEWAL: provision using stored credentials immediately ────────────────
         await db.query(
             `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL WHERE phone = $1`,
             [user.phone]
@@ -143,7 +170,7 @@ function promoTip(durationDays) {
  */
 export async function provisionOrQueue(db, sock, user, plan, remoteJid, username, password, isRenewal, expiryTime = null) {
     try {
-        const comment = expiryTime ? buildMikrotikComment(plan.duration_days, expiryTime) : null;
+        const comment = expiryTime ? buildMikrotikComment(user.phone, plan.duration_days, expiryTime) : null;
         await provisionHotspotUser(username, plan.mikrotik_profile, password, comment);
 
         // Save credentials on the user record

@@ -59,7 +59,7 @@ async function processJob(db, sock, job) {
             ORDER BY s.id DESC LIMIT 1
         `, [job.user_id]);
         const sub     = subRes.rows[0];
-        const comment = sub ? buildMikrotikComment(sub.duration_days, sub.expiry_time) : null;
+        const comment = sub ? buildMikrotikComment(job.phone, sub.duration_days, sub.expiry_time) : null;
 
         await provisionHotspotUser(job.phone, job.mikrotik_profile, job.pin, comment);
 

@@ -1,4 +1,4 @@
-import { removeHotspotUser } from './mikrotik.js';
+import { removeHotspotUser, provisionHotspotUser, buildMikrotikComment } from './mikrotik.js';
 
 const fmt = (d) => new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 
@@ -10,7 +10,7 @@ async function cleanupExpiredUsers(db) {
     let removed = 0, failed = 0;
     try {
         const res = await db.query(`
-            SELECT s.id AS sub_id, u.hotspot_username
+            SELECT s.id AS sub_id, u.hotspot_username, u.id AS user_id
             FROM subscriptions s
             JOIN users u ON u.id = s.user_id
             WHERE s.status = 'active'
@@ -19,12 +19,22 @@ async function cleanupExpiredUsers(db) {
         `);
 
         for (const row of res.rows) {
-            try {
-                await removeHotspotUser(row.hotspot_username);
-                removed++;
-            } catch (err) {
-                console.error(`Scheduler: MikroTik removal failed for '${row.hotspot_username}':`, err.message);
-                failed++;
+            // Check if user has a newly activated subscription (from queue)
+            const activeCheck = await db.query(`
+                SELECT id FROM subscriptions 
+                WHERE user_id = $1 AND status = 'active' AND expiry_time > NOW()
+            `, [row.user_id]);
+
+            if (activeCheck.rowCount === 0) {
+                try {
+                    await removeHotspotUser(row.hotspot_username);
+                    removed++;
+                } catch (err) {
+                    console.error(`Scheduler: MikroTik removal failed for '${row.hotspot_username}':`, err.message);
+                    failed++;
+                }
+            } else {
+                console.log(`🧹 Cleanup: Skipped removal for '${row.hotspot_username}' (they transitioned to a queued plan)`);
             }
             // Mark as expired in DB regardless of MikroTik result
             await db.query(`UPDATE subscriptions SET status = 'expired' WHERE id = $1`, [row.sub_id]);
@@ -115,6 +125,56 @@ async function sendExpiryAlerts(db, getSock) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Job C — Activate queued subscriptions (Runs every minute)
+// ─────────────────────────────────────────────────────────────────────────────
+async function activateQueuedUsers(db, getSock) {
+    try {
+        const res = await db.query(`
+            SELECT s.id AS sub_id, s.expiry_time, u.hotspot_username, u.hotspot_password, u.phone,
+                   p.mikrotik_profile, p.duration_days, p.name AS plan_name, ws.remote_jid
+            FROM subscriptions s
+            JOIN users u ON u.id = s.user_id
+            JOIN plans p ON p.id = s.plan_id
+            LEFT JOIN whatsapp_sessions ws ON ws.phone = u.phone
+            WHERE s.status = 'queued'
+              AND s.start_time <= NOW()
+        `);
+
+        if (res.rows.length === 0) return;
+
+        const sock = getSock();
+        
+        for (const row of res.rows) {
+            if (!row.hotspot_username || !row.hotspot_password) continue;
+            
+            try {
+                // Provision new profile on MikroTik
+                const comment = buildMikrotikComment(row.phone, row.duration_days, row.expiry_time);
+                await provisionHotspotUser(row.hotspot_username, row.mikrotik_profile, row.hotspot_password, comment);
+                
+                // Mark active in DB
+                await db.query(`UPDATE subscriptions SET status = 'active' WHERE id = $1`, [row.sub_id]);
+                console.log(`✅ Scheduler: Activated queued plan for '${row.hotspot_username}'`);
+
+                // Notify user on WhatsApp
+                if (sock && row.remote_jid) {
+                    await sock.sendMessage(row.remote_jid, {
+                        text: `🎉 *Your Queued Plan is Active!*\n\n` +
+                              `Your old plan has expired and your new *${row.plan_name}* plan is now running.\n` +
+                              `Your MikroTik profile has been updated automatically! 🛰️`
+                    });
+                }
+            } catch (err) {
+                console.error(`❌ Scheduler: Failed to activate queued plan for '${row.hotspot_username}':`, err.message);
+                // Leave it as 'queued', it will retry on the next minute tick
+            }
+        }
+    } catch (err) {
+        console.error('Scheduler: activateQueuedUsers error:', err.message);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Start all scheduled jobs
 // getSock() should return the current live Baileys socket (updated on reconnect)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,7 +187,11 @@ export function startScheduler(db, getSock) {
     // Job B: expiry alerts every 1 hour
     setInterval(() => sendExpiryAlerts(db, getSock), 60 * 60 * 1000);
 
+    // Job C: activate queued plans every 1 minute
+    setInterval(() => activateQueuedUsers(db, getSock), 60 * 1000);
+
     // Run immediately on startup too
     cleanupExpiredUsers(db);
     sendExpiryAlerts(db, getSock);
+    activateQueuedUsers(db, getSock);
 }

@@ -7,7 +7,7 @@ import { RouterOSAPI } from 'node-routeros';
  * @param {Date|string} expiry   - Expiry timestamp
  * @returns {string}
  */
-export function buildMikrotikComment(durationDays, expiry) {
+export function buildMikrotikComment(phone, durationDays, expiry) {
     let code;
     if      (durationDays >= 28) code = '1M';
     else if (durationDays >= 14) code = '2W';
@@ -22,7 +22,7 @@ export function buildMikrotikComment(durationDays, expiry) {
     const h12   = h24 % 12 || 12;
     const ampm  = h24 >= 12 ? 'pm' : 'am';
 
-    return `${code} ${day} ${month} ${h12}${ampm}`; // e.g. "1M 25 May 10pm"
+    return `${phone} - ${code} ${day} ${month} ${h12}${ampm}`; // e.g. "2348123456789 - 1M 25 May 10pm"
 }
 
 function generatePin() {

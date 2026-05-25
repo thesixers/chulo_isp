@@ -8,8 +8,9 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-    CREATE TYPE subscription_status AS ENUM ('active', 'expired', 'cancelled');
+    CREATE TYPE subscription_status AS ENUM ('active', 'expired', 'cancelled', 'queued');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE subscription_status ADD VALUE IF NOT EXISTS 'queued'; EXCEPTION WHEN others THEN NULL; END $$;
 
 DO $$ BEGIN
     CREATE TYPE session_state AS ENUM (

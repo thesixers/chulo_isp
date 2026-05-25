@@ -494,6 +494,9 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
                 return;
             }
 
+            const activeSub = await getActiveSubscription(db, user.id);
+            const isCrossProfile = activeSub && activeSub.mikrotik_profile !== selectedPlan.mikrotik_profile;
+            
             await sock.sendMessage(from, {
                 text: `⏳ Generating your payment account for *${selectedPlan.name}*...`,
             });
@@ -512,6 +515,12 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
 
                 await updateSession(db, phone, 'awaiting_payment', selectedPlan.id, from);
 
+                let noticeText = `Your plan activates automatically once payment is received! 🎉`;
+                if (isCrossProfile) {
+                    const expiryStr = fmt(activeSub.expiry_time);
+                    noticeText = `⚠️ *Important Notice*\nYou currently have an active plan for a different device limit. Your new *${selectedPlan.name}* plan will be queued and will automatically activate AFTER your current plan expires on *${expiryStr}*.`;
+                }
+
                 await sock.sendMessage(from, {
                     text:
                         `✅ *Payment Details*\n\n` +
@@ -520,7 +529,7 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
                         `🏦 Bank: *${bankName}*\n` +
                         `💳 Account Number: *${accountNumber}*\n\n` +
                         `⏱ This account expires in *1 hour*.\n` +
-                        `Your plan activates automatically once payment is received! 🎉\n\n` +
+                        `${noticeText}\n\n` +
                         `Reply *HI* to cancel and start over.`,
                 });
 
@@ -727,7 +736,7 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
             await sock.sendMessage(from, { text: `⏳ Updating your username to *${raw}*...` });
 
             try {
-                const comment = buildMikrotikComment(sub.duration_days, sub.expiry_time);
+                const comment = buildMikrotikComment(user.phone, sub.duration_days, sub.expiry_time);
                 // 1. Create the new username on MikroTik with the stored password and comment
                 await provisionHotspotUser(raw, sub.mikrotik_profile, user.hotspot_password, comment);
 
@@ -755,7 +764,7 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
                         `🌐 *Your New Login Details*\n` +
                         `Username: \`${raw}\`\n` +
                         `Password: \`${user.hotspot_password}\`\n\n` +
-                        `Connect at: *http://10.5.50.1*\n\n` +
+                        `Connect at: *http://10.5.50.1/login*\n\n` +
                         `Reply *HI* for the main menu.`,
                 });
             } catch (err) {
@@ -797,7 +806,7 @@ export async function handleMessage(sock, from, pnJid, text, pushName = null, db
             await sock.sendMessage(from, { text: `⏳ Updating your password...` });
 
             try {
-                const comment = buildMikrotikComment(sub.duration_days, sub.expiry_time);
+                const comment = buildMikrotikComment(user.phone, sub.duration_days, sub.expiry_time);
                 await provisionHotspotUser(username, sub.mikrotik_profile, newPass, comment);
                 await db.query(`UPDATE users SET hotspot_password = $1 WHERE id = $2`, [newPass, user.id]);
                 await updateSession(db, phone, 'start');
