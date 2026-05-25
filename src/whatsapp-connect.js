@@ -12,8 +12,39 @@ export async function connectToWhatsApp(onMessage, onReconnect) {
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        printQRInTerminal: true
+        printQRInTerminal: true,
+        syncFullHistory: false,          // Memory Optimization: Do not download old chats
+        markOnlineOnConnect: false,      // Memory Optimization: Do not aggressively broadcast presence
+        generateHighQualityLinkPreview: false,
+        getMessage: async () => {
+            // Memory Optimization: Prevents Baileys from locally caching messages for replies
+            return { conversation: 'hello' };
+        }
     });
+
+    // ─────────────────────────────────────────────────────────
+    // ANTI-BAN HUMANIZER: Intercept and delay all outgoing messages
+    // ─────────────────────────────────────────────────────────
+    const originalSendMessage = sock.sendMessage.bind(sock);
+    sock.sendMessage = async (jid, content, options) => {
+        // If it's a direct text message, simulate human typing
+        if (content && content.text) {
+            try {
+                await sock.presenceSubscribe(jid);
+                await sock.sendPresenceUpdate('composing', jid);
+                
+                // Calculate realistic delay: 500ms base + 30ms per character (capped at 3 seconds)
+                const delay = Math.min(3000, 500 + (content.text.length * 30));
+                await new Promise(resolve => setTimeout(resolve, delay));
+                
+                await sock.sendPresenceUpdate('paused', jid);
+            } catch (err) {
+                // Ignore presence update errors (e.g. if socket reconnects mid-typing)
+                console.warn(`⚠️ Typing simulation failed for ${jid}, sending anyway...`);
+            }
+        }
+        return originalSendMessage(jid, content, options);
+    };
 
     sock.ev.on('creds.update', saveCreds);
 
