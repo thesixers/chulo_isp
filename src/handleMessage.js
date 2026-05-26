@@ -43,12 +43,12 @@ async function upsertUser(db, phone, pushName = null) {
 
 async function getSession(db, phone) {
   const res = await db.query(
-    "SELECT state, plan_id, remote_jid FROM whatsapp_sessions WHERE phone = $1",
+    "SELECT state, plan_id, remote_jid, gift_target_user_id FROM whatsapp_sessions WHERE phone = $1",
     [phone],
   );
   return res.rows.length > 0
     ? res.rows[0]
-    : { state: "start", plan_id: null, remote_jid: null };
+    : { state: "start", plan_id: null, remote_jid: null, gift_target_user_id: null };
 }
 
 async function updateSession(
@@ -57,18 +57,20 @@ async function updateSession(
   state,
   planId = null,
   remoteJid = null,
+  giftTargetUserId = null,
 ) {
   await db.query(
     `
-        INSERT INTO whatsapp_sessions (phone, state, plan_id, remote_jid)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO whatsapp_sessions (phone, state, plan_id, remote_jid, gift_target_user_id)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (phone) DO UPDATE
-        SET state        = EXCLUDED.state,
-            plan_id      = COALESCE(EXCLUDED.plan_id, whatsapp_sessions.plan_id),
-            remote_jid   = COALESCE(EXCLUDED.remote_jid, whatsapp_sessions.remote_jid),
-            last_updated = CURRENT_TIMESTAMP
+        SET state               = EXCLUDED.state,
+            plan_id             = COALESCE(EXCLUDED.plan_id, whatsapp_sessions.plan_id),
+            remote_jid          = COALESCE(EXCLUDED.remote_jid, whatsapp_sessions.remote_jid),
+            gift_target_user_id = EXCLUDED.gift_target_user_id,
+            last_updated        = CURRENT_TIMESTAMP
     `,
-    [phone, state, planId, remoteJid],
+    [phone, state, planId, remoteJid, giftTargetUserId],
   );
 }
 
@@ -290,14 +292,15 @@ export async function handleMessage(
       switch (message) {
         // ── 1. Buy a Data Plan ──────────────────────────────────
         case "1": {
-          await updateSession(
-            db,
-            phone,
-            "awaiting_device_selection",
-            null,
-            from,
-          );
-          await sock.sendMessage(from, { text: buildDeviceMenu() });
+          // Clear any previous gift target before starting a new purchase flow
+          await updateSession(db, phone, "awaiting_purchase_target", null, from, null);
+          await sock.sendMessage(from, {
+            text:
+              `📡 *Who are you buying for?*\n\n` +
+              `1️⃣  Myself\n` +
+              `2️⃣  Someone else\n\n` +
+              `Reply *1* or *2*, or *0* to go back.`,
+          });
           break;
         }
 
@@ -517,9 +520,67 @@ export async function handleMessage(
     }
 
     // ──────────────────────────────────────────────────────────────────
+    // BUY PLAN — Step -1: self or someone else?
+    // ──────────────────────────────────────────────────────────────────
+    case "awaiting_purchase_target": {
+      if (message === "1") {
+        // Buying for self — clear any gift target and proceed normally
+        await updateSession(db, phone, "awaiting_device_selection", null, from, null);
+        await sock.sendMessage(from, { text: buildDeviceMenu() });
+      } else if (message === "2") {
+        // Buying for someone else — ask for their username
+        await updateSession(db, phone, "awaiting_gift_username", null, from, null);
+        await sock.sendMessage(from, {
+          text:
+            `👤 *Enter the hotspot username* of the person you're buying for:\n\n` +
+            `Reply *0* to go back.`,
+        });
+      } else {
+        await sock.sendMessage(from, {
+          text: `Please reply *1* for Myself or *2* for Someone else, or *0* to go back.`,
+        });
+      }
+      break;
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // BUY PLAN — Step -0.5: look up gift recipient by username
+    // ──────────────────────────────────────────────────────────────────
+    case "awaiting_gift_username": {
+      const targetUsername = message.trim();
+
+      // Look up User B by their hotspot username (case-insensitive)
+      const targetRes = await db.query(
+        `SELECT * FROM users WHERE LOWER(hotspot_username) = LOWER($1)`,
+        [targetUsername],
+      );
+
+      if (!targetRes.rows.length) {
+        await sock.sendMessage(from, {
+          text:
+            `❌ No account found with username *${targetUsername}*.\n\n` +
+            `Please check the username and try again, or reply *0* to go back.`,
+        });
+        break;
+      }
+
+      const targetUser = targetRes.rows[0];
+
+      // Confirm and proceed to device selection, storing the target user's ID
+      await updateSession(db, phone, "awaiting_device_selection", null, from, targetUser.id);
+      await sock.sendMessage(from, {
+        text:
+          `✅ Buying for *${targetUser.hotspot_username}*!\n\n` +
+          buildDeviceMenu(),
+      });
+      break;
+    }
+
+    // ──────────────────────────────────────────────────────────────────
     // BUY PLAN — Step 0: pick number of devices
     // ──────────────────────────────────────────────────────────────────
     case "awaiting_device_selection": {
+
       const profileMap = {
         1: { profile: "7/7_Mbps_1Users", label: "Single Device" },
         2: { profile: "7/7_Mbps_2Users", label: "Two Devices" },
@@ -531,9 +592,9 @@ export async function handleMessage(
           `SELECT * FROM plans WHERE mikrotik_profile = $1 ORDER BY duration_days DESC`,
           [choice.profile],
         );
-        // Store baseId in plan_id so positional selection works
+        // Store baseId in plan_id so positional selection works, and preserve gift target
         const baseId = res.rows[0]?.id;
-        await updateSession(db, phone, "awaiting_plan_selection", baseId, from);
+        await updateSession(db, phone, "awaiting_plan_selection", baseId, from, session.gift_target_user_id);
         await sock.sendMessage(from, {
           text: buildFilteredPlanMenu(res.rows, choice.label),
         });
@@ -581,13 +642,22 @@ export async function handleMessage(
         return;
       }
 
-      const activeSub = await getActiveSubscription(db, user.id);
+      // For cross-profile check: use the TARGET user's active sub (not User A's)
+      const subCheckUserId = session.gift_target_user_id || user.id;
+      const activeSub = await getActiveSubscription(db, subCheckUserId);
       const isCrossProfile =
         activeSub &&
         activeSub.mikrotik_profile !== selectedPlan.mikrotik_profile;
 
+      const isGift = !!session.gift_target_user_id;
+      const giftTarget = isGift
+        ? (await db.query(`SELECT hotspot_username FROM users WHERE id = $1`, [session.gift_target_user_id])).rows[0]
+        : null;
+
       await sock.sendMessage(from, {
-        text: `⏳ Generating your payment account for *${selectedPlan.name}*...`,
+        text: isGift
+          ? `⏳ Generating payment account for *${giftTarget?.hotspot_username}*'s plan...`
+          : `⏳ Generating your payment account for *${selectedPlan.name}*...`,
       });
 
       try {
@@ -606,23 +676,31 @@ export async function handleMessage(
           [user.id, selectedPlan.price, txRef],
         );
 
+        // Preserve gift_target_user_id through awaiting_payment state
         await updateSession(
           db,
           phone,
           "awaiting_payment",
           selectedPlan.id,
           from,
+          session.gift_target_user_id,
         );
 
-        let noticeText = `Your plan activates automatically once payment is received! 🎉`;
+        let noticeText = isGift
+          ? `This plan will be gifted to *${giftTarget?.hotspot_username}* and activates automatically once payment is received! 🎁`
+          : `Your plan activates automatically once payment is received! 🎉`;
+
         if (isCrossProfile) {
           const expiryStr = fmt(activeSub.expiry_time);
-          noticeText = `⚠️ *Important Notice*\nYou currently have an active plan for a different device limit. Your new *${selectedPlan.name}* plan will be queued and will automatically activate AFTER your current plan expires on *${expiryStr}*.`;
+          noticeText = isGift
+            ? `⚠️ *Important Notice*\n*${giftTarget?.hotspot_username}* already has an active plan for a different device limit. The new *${selectedPlan.name}* plan will be queued and activates AFTER their current plan expires on *${expiryStr}*.`
+            : `⚠️ *Important Notice*\nYou currently have an active plan for a different device limit. Your new *${selectedPlan.name}* plan will be queued and will automatically activate AFTER your current plan expires on *${expiryStr}*.`;
         }
 
         await sock.sendMessage(from, {
           text:
             `✅ *Payment Details*\n\n` +
+            (isGift ? `🎁 Gifting to: *${giftTarget?.hotspot_username}*\n` : "") +
             `📡 Plan: *${selectedPlan.name}*\n` +
             `💰 Amount: *₦${Number(selectedPlan.price).toLocaleString()}*\n\n` +
             `🏦 Bank: *${bankName}*\n` +

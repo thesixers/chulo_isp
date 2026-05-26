@@ -18,6 +18,15 @@ export async function fulfillPayment(db, sock, user) {
     );
     const session   = sessionRes.rows[0];
     const remoteJid = session?.remote_jid || `${user.phone}@s.whatsapp.net`;
+    const giftTargetUserId = session?.gift_target_user_id || null;
+
+    // If this is a gift purchase, fetch User B's record. Otherwise use User A (the payer).
+    let targetUser = user;
+    if (giftTargetUserId) {
+        const targetRes = await db.query(`SELECT * FROM users WHERE id = $1`, [giftTargetUserId]);
+        if (targetRes.rows.length) targetUser = targetRes.rows[0];
+    }
+    const isGift = giftTargetUserId && targetUser.id !== user.id;
 
     console.log(`💬 fulfillPayment: remoteJid=${remoteJid}`);
 
@@ -60,13 +69,13 @@ export async function fulfillPayment(db, sock, user) {
         [payment.id]
     );
 
-    // 4. Calculate subscription expiry (extend from current active sub if renewal)
+    // 4. Calculate subscription expiry (extend from target user's active sub if renewal/gift)
     const activeSubRes = await db.query(`
         SELECT s.*, p.mikrotik_profile FROM subscriptions s
         JOIN plans p ON p.id = s.plan_id
         WHERE s.user_id = $1 AND s.status = 'active' AND s.expiry_time > CURRENT_TIMESTAMP
         ORDER BY s.expiry_time DESC LIMIT 1
-    `, [user.id]);
+    `, [targetUser.id]);
 
     const activeSub = activeSubRes.rows[0];
     const isRenewal = !!activeSub;
@@ -80,62 +89,90 @@ export async function fulfillPayment(db, sock, user) {
     if (isRenewal) newExpiry = new Date(activeSub.expiry_time);
     newExpiry.setDate(newExpiry.getDate() + plan.duration_days + bonusDays);
 
-    // 5. Create the subscription record
+    // 5. Create the subscription record (always on targetUser's account)
     if (isCrossProfile) {
         await db.query(`
             INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time, alert_sent)
             VALUES ($1, $2, 'queued', $3, $4, false)
-        `, [user.id, plan.id, activeSub.expiry_time, newExpiry]);
+        `, [targetUser.id, plan.id, activeSub.expiry_time, newExpiry]);
     } else {
         await db.query(`
             INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time, alert_sent)
             VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3, false)
-        `, [user.id, plan.id, newExpiry]);
+        `, [targetUser.id, plan.id, newExpiry]);
     }
 
     // 6. Send payment confirmation
-    console.log(`📤 Sending payment confirmation to ${remoteJid} (isRenewal=${isRenewal}, isCrossProfile=${isCrossProfile})`);
+    console.log(`📤 Sending payment confirmation to ${remoteJid} (isGift=${isGift}, isRenewal=${isRenewal}, isCrossProfile=${isCrossProfile})`);
     try {
         if (isCrossProfile) {
-            await sock.sendMessage(remoteJid, {
-                text:
-                    `✅ *Payment Confirmed!*\n\n` +
-                    `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n\n` +
-                    `⏳ *Plan Queued*\n` +
-                    `Your new plan will automatically activate exactly when your current plan expires on *${new Date(activeSub.expiry_time).toDateString()}*.\n` +
-                    (bonusDays > 0 ? `\n🎁 *+${bonusDays} free day${bonusDays > 1 ? 's' : ''} added* for renewing early! 🎉` : ''),
-            });
-        } else {
+            // Notify payer (User A)
             await sock.sendMessage(remoteJid, {
                 text:
                     `✅ *Payment Confirmed!*\n\n` +
                     `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n` +
-                    `📅 Expires: *${newExpiry.toDateString()}*` +
-                    (renewingEarly ? `\n\n🎁 *+${bonusDays} free day${bonusDays > 1 ? 's' : ''} added* for renewing early! 🎉` : '') +
-                    promoTip(plan.duration_days),
+                    (isGift ? `🎁 Gifted to: *${targetUser.hotspot_username}*\n\n` : `\n`) +
+                    `⏳ *Plan Queued*\n` +
+                    `The plan will automatically activate when the current plan expires on *${new Date(activeSub.expiry_time).toDateString()}*.` +
+                    (bonusDays > 0 ? `\n🎁 *+${bonusDays} free day${bonusDays > 1 ? 's' : ''} added* for renewing early! 🎉` : ''),
             });
+            // Notify recipient (User B) if this is a gift
+            if (isGift) {
+                const targetJid = (await db.query(`SELECT remote_jid FROM whatsapp_sessions WHERE phone = $1`, [targetUser.phone])).rows[0]?.remote_jid
+                    || `${targetUser.phone}@s.whatsapp.net`;
+                await sock.sendMessage(targetJid, {
+                    text:
+                        `🎁 *Someone gifted you a plan!*\n\n` +
+                        `📡 Plan: *${plan.name}*\n` +
+                        `⏳ *Queued* — activates on *${new Date(activeSub.expiry_time).toDateString()}* when your current plan expires.\n\n` +
+                        `Reply *HI* to view your subscription.`,
+                });
+            }
+        } else {
+            // Notify payer (User A)
+            await sock.sendMessage(remoteJid, {
+                text:
+                    `✅ *Payment Confirmed!*\n\n` +
+                    `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n` +
+                    (isGift ? `🎁 Gifted to: *${targetUser.hotspot_username}*\n` : '') +
+                    `📅 Expires: *${newExpiry.toDateString()}*` +
+                    (renewingEarly && !isGift ? `\n\n🎁 *+${bonusDays} free day${bonusDays > 1 ? 's' : ''} added* for renewing early! 🎉` : '') +
+                    (!isGift ? promoTip(plan.duration_days) : ''),
+            });
+            // Notify recipient (User B) if this is a gift
+            if (isGift) {
+                const targetJid = (await db.query(`SELECT remote_jid FROM whatsapp_sessions WHERE phone = $1`, [targetUser.phone])).rows[0]?.remote_jid
+                    || `${targetUser.phone}@s.whatsapp.net`;
+                await sock.sendMessage(targetJid, {
+                    text:
+                        `🎁 *Someone just gifted you internet!*\n\n` +
+                        `📡 Plan: *${plan.name}*\n` +
+                        `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
+                        `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`,
+                });
+            }
         }
     } catch (msgErr) {
         console.error(`❌ Failed to send confirmation to ${remoteJid}:`, msgErr.message);
     }
 
-    // 7. Branch: renewal vs first-time vs cross-profile
+    // 7. Branch: renewal vs first-time vs cross-profile (always for targetUser)
     if (isCrossProfile) {
         // ── CROSS-PROFILE: Do not provision on MikroTik yet. Reset session. ──
         await db.query(
-            `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL WHERE phone = $1`,
+            `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL, gift_target_user_id = NULL WHERE phone = $1`,
             [user.phone]
         );
-    } else if (isRenewal && user.hotspot_username && user.hotspot_password) {
-        // ── RENEWAL: provision using stored credentials immediately ────────────────
+    } else if (targetUser.hotspot_username && targetUser.hotspot_password) {
+        // ── RENEWAL / GIFT TO EXISTING USER: provision using stored credentials ──
         await db.query(
-            `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL WHERE phone = $1`,
+            `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL, gift_target_user_id = NULL WHERE phone = $1`,
             [user.phone]
         );
-        await provisionOrQueue(db, sock, user, plan, remoteJid, user.hotspot_username, user.hotspot_password, true, newExpiry);
-
+        await provisionOrQueue(db, sock, targetUser, plan, remoteJid, targetUser.hotspot_username, targetUser.hotspot_password, !isGift, newExpiry);
     } else {
-        // ── FIRST TIME (or credentials not yet set): ask user to choose them ──
+        // ── FIRST TIME (no credentials yet): ask the payer to set up credentials for recipient ──
+        // This only applies if the target has never set up their account
         await db.query(`
             UPDATE whatsapp_sessions
             SET state = 'awaiting_hotspot_username', plan_id = $1, last_updated = CURRENT_TIMESTAMP
@@ -144,8 +181,8 @@ export async function fulfillPayment(db, sock, user) {
 
         await sock.sendMessage(remoteJid, {
             text:
-                `🔐 *Set Up Your Hotspot Login*\n\n` +
-                `Please choose a *username* for your internet connection.\n\n` +
+                `🔐 *Set Up Hotspot Login for ${isGift ? targetUser.hotspot_username || 'the recipient' : 'You'}*\n\n` +
+                `Please choose a *username* for the internet connection.\n\n` +
                 `Rules:\n` +
                 `• Letters and numbers only (no emojis or spaces)\n` +
                 `• 3–20 characters\n` +

@@ -35,6 +35,8 @@ DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_hotspot_p
 DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_new_username'; EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_new_password'; EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_device_selection'; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_purchase_target'; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'awaiting_gift_username'; EXCEPTION WHEN others THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -102,6 +104,8 @@ CREATE TABLE IF NOT EXISTS whatsapp_sessions (
 
 -- Add remote_jid to existing sessions table
 ALTER TABLE whatsapp_sessions ADD COLUMN IF NOT EXISTS remote_jid VARCHAR(100);
+-- Add gift target user reference (NULL when buying for self)
+ALTER TABLE whatsapp_sessions ADD COLUMN IF NOT EXISTS gift_target_user_id INT REFERENCES users(id);
 
 -- MikroTik provisioning retry queue
 CREATE TABLE IF NOT EXISTS provisioning_queue (
