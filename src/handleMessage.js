@@ -350,7 +350,19 @@ export async function handleMessage(
         // ── 4. Check Sub Duration Left ──────────────────────────
         case "4": {
           const sub = await getActiveSubscription(db, user.id);
-          if (!sub) {
+
+          // Also fetch any queued (pending activation) plans
+          const queuedRes = await db.query(
+            `SELECT s.start_time, s.expiry_time, p.name AS plan_name
+             FROM subscriptions s
+             JOIN plans p ON p.id = s.plan_id
+             WHERE s.user_id = $1 AND s.status = 'queued'
+             ORDER BY s.start_time ASC`,
+            [user.id],
+          );
+          const queuedPlans = queuedRes.rows;
+
+          if (!sub && !queuedPlans.length) {
             await sock.sendMessage(from, {
               text:
                 `📋 *No Active Subscription*\n\n` +
@@ -358,36 +370,48 @@ export async function handleMessage(
                 `Reply *1* to buy a plan or *HI* for the main menu.`,
             });
           } else {
-            const expiry = new Date(sub.expiry_time);
-            const daysLeft = Math.ceil(
-              (expiry - new Date()) / (1000 * 60 * 60 * 24),
-            );
-            const hoursLeft = Math.ceil(
-              (expiry - new Date()) / (1000 * 60 * 60),
-            );
-            const timeLeft =
-              daysLeft > 1
-                ? `${daysLeft} days`
-                : `${hoursLeft} hour${hoursLeft !== 1 ? "s" : ""}`;
+            let text = `📋 *Your Subscription*\n\n`;
 
-            const statusIcon = daysLeft <= 2 ? "⚠️" : "✅";
+            if (sub) {
+              const expiry = new Date(sub.expiry_time);
+              const daysLeft = Math.ceil(
+                (expiry - new Date()) / (1000 * 60 * 60 * 24),
+              );
+              const hoursLeft = Math.ceil(
+                (expiry - new Date()) / (1000 * 60 * 60),
+              );
+              const timeLeft =
+                daysLeft > 1
+                  ? `${daysLeft} days`
+                  : `${hoursLeft} hour${hoursLeft !== 1 ? "s" : ""}`;
+              const statusIcon = daysLeft <= 2 ? "⚠️" : "🟢";
 
-            await sock.sendMessage(from, {
-              text:
-                `📋 *Your Active Subscription*\n\n` +
-                `📡 Plan: *${sub.plan_name}*\n` +
-                `📅 Started: *${fmt(sub.start_time)}*\n` +
-                `🔚 Expires: *${fmt(sub.expiry_time)}*\n` +
-                `${statusIcon} Time left: *${timeLeft}*\n\n` +
-                (daysLeft <= 2
-                  ? `⚠️ Your plan is expiring soon! Reply *1* to renew.\n\n`
-                  : "") +
-                `Reply *HI* for the main menu.`,
-            });
+              text +=
+                `${statusIcon} *${sub.plan_name}*\n` +
+                `⏱ ${timeLeft} left · Expires ${fmt(sub.expiry_time)}`;
+
+              if (daysLeft <= 2) {
+                text += `\n⚠️ Expiring soon! Reply *1* to renew.`;
+              }
+            }
+
+            if (queuedPlans.length) {
+              text += `\n\n🔒 *Pending Activation*\n`;
+              for (const q of queuedPlans) {
+                text +=
+                  `\n⏳ ${q.plan_name}\n` +
+                  `🕐 Starts ${fmt(q.start_time)} · Expires ${fmt(q.expiry_time)}`;
+              }
+            }
+
+            text += `\n\nReply *HI* for the main menu.`;
+
+            await sock.sendMessage(from, { text });
           }
           await updateSession(db, phone, "start");
           break;
         }
+
 
         // ── 5. Subscription History ─────────────────────────────
         case "5": {
