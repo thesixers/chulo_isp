@@ -73,8 +73,8 @@ export async function fulfillPayment(db, sock, user) {
     const isCrossProfile = isRenewal && activeSub.mikrotik_profile !== plan.mikrotik_profile;
 
     const renewingEarly = isRenewal && new Date(activeSub.expiry_time) > new Date();
-    // Loyalty bonus: monthly plans get 3 free days, weekly/3-day get 1 free day
-    const bonusDays = renewingEarly ? (plan.duration_days >= 28 ? 3 : 1) : 0;
+    // Loyalty bonus: monthly plans get 3 free days, weekly/3-day get 1 free day (1-day plans excluded)
+    const bonusDays = renewingEarly ? (plan.duration_days >= 28 ? 3 : plan.duration_days >= 7 ? 1 : 0) : 0;
 
     let newExpiry = new Date();
     if (isRenewal) newExpiry = new Date(activeSub.expiry_time);
