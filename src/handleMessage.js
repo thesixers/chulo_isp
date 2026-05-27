@@ -273,12 +273,40 @@ export async function handleMessage(
   // Context-aware back: '0' goes to the previous logical step
   if (msgLower === "0") {
     if (session.state === "awaiting_plan_selection") {
-      // Back from plan list → device selection
-      await updateSession(db, phone, "awaiting_device_selection", null, from);
+      // Plan list → device selection (preserve gift target)
+      await updateSession(db, phone, "awaiting_device_selection", null, from, session.gift_target_user_id);
       await sock.sendMessage(from, { text: buildDeviceMenu() });
+    } else if (session.state === "awaiting_device_selection" && session.gift_target_user_id) {
+      // Device selection (gift mode) → enter username screen
+      await updateSession(db, phone, "awaiting_gift_username", null, from, null);
+      await sock.sendMessage(from, {
+        text:
+          `👤 *Enter the hotspot username* of the person you're buying for:\n\n` +
+          `Reply *0* to go back.`,
+      });
+    } else if (session.state === "awaiting_device_selection" && !session.gift_target_user_id) {
+      // Device selection (self mode) → "Myself or Someone else?"
+      await updateSession(db, phone, "awaiting_purchase_target", null, from, null);
+      await sock.sendMessage(from, {
+        text:
+          `📡 *Who are you buying for?*\n\n` +
+          `1️⃣  Myself\n` +
+          `2️⃣  Someone else\n\n` +
+          `Reply *1* or *2*, or *0* to go back.`,
+      });
+    } else if (session.state === "awaiting_gift_username") {
+      // Enter username → "Myself or Someone else?"
+      await updateSession(db, phone, "awaiting_purchase_target", null, from, null);
+      await sock.sendMessage(from, {
+        text:
+          `📡 *Who are you buying for?*\n\n` +
+          `1️⃣  Myself\n` +
+          `2️⃣  Someone else\n\n` +
+          `Reply *1* or *2*, or *0* to go back.`,
+      });
     } else {
-      // Everywhere else → main menu
-      await updateSession(db, phone, "awaiting_service_selection", null, from);
+      // Everywhere else (including awaiting_purchase_target) → main menu
+      await updateSession(db, phone, "awaiting_service_selection", null, from, null);
       await sock.sendMessage(from, { text: buildWelcomeMessage(firstName) });
     }
     return;
