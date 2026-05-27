@@ -168,8 +168,7 @@ function buildAdminWelcomeMessage(name = "Admin") {
     `6️⃣  💳 Payment History\n` +
     `7️⃣  📞 Contact Support\n\n` +
     `*🛠️ Admin Commands:*\n` +
-    `\`!stats\`  •  \`!users [page]\`  •  \`!payments [page]\`\n` +
-    `\`!user <phone>\`  •  \`!broadcast <msg>\`\n\n` +
+    `Type *!help* to see all admin commands.\n\n` +
     `Reply with a number (1–7) or an admin command.`
   );
 }
