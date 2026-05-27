@@ -46,9 +46,10 @@ export async function handleAdminMessage(sock, from, text, db) {
 
     // ── Stats overview ─────────────────────────────────────────────────────
     if (cmd === '!stats') {
-        const [users, activeSubs, revenue, pending] = await Promise.all([
+        const [totalUsersRes, activeSubsRes, queuedSubsRes, revenueRes, pendingProvRes] = await Promise.all([
             db.query(`SELECT COUNT(*) FROM users`),
             db.query(`SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND expiry_time > NOW()`),
+            db.query(`SELECT COUNT(*) FROM subscriptions WHERE status = 'queued'`),
             db.query(`SELECT COALESCE(SUM(amount), 0) AS total FROM payments WHERE status = 'completed'`),
             db.query(`SELECT COUNT(*) FROM provisioning_queue WHERE status = 'pending'`),
         ]);
@@ -56,13 +57,15 @@ export async function handleAdminMessage(sock, from, text, db) {
         await sock.sendMessage(from, {
             text:
                 `📊 *Chulo Speednet Stats*\n\n` +
-                `👥 Total Users: *${users.rows[0].count}*\n` +
-                `✅ Active Subscriptions: *${activeSubs.rows[0].count}*\n` +
-                `💰 Total Revenue: *₦${Number(revenue.rows[0].total).toLocaleString()}*\n` +
-                `⏳ Pending Provisions: *${pending.rows[0].count}*`,
+                `👥 Total Users: *${totalUsersRes.rows[0].count}*\n` +
+                `✅ Active Subscribers: *${activeSubsRes.rows[0].count}*\n` +
+                `⏳ Pending Subscriptions: *${queuedSubsRes.rows[0].count}*\n` +
+                `💰 Total Revenue: *₦${Number(revenueRes.rows[0].total).toLocaleString()}*\n` +
+                `⚙️ Pending Provisions: *${pendingProvRes.rows[0].count}*`,
         });
         return true;
     }
+
 
     // ── Users list (paginated) ─────────────────────────────────────────────
     if (cmd === '!users') {

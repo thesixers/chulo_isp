@@ -13,7 +13,9 @@ function sanitizeUsername(input) {
 }
 
 function isValidUsername(s) {
-  return /^[a-zA-Z0-9_]{3,20}$/.test(s);
+  // Must be 3–20 chars, letters/numbers/underscores, and contain at least one letter
+  // (prevents purely numeric usernames which would clash with page numbers in admin commands)
+  return /^[a-zA-Z0-9_]{3,20}$/.test(s) && /[a-zA-Z]/.test(s);
 }
 
 function isValidPassword(s) {
@@ -828,10 +830,18 @@ export async function handleMessage(
     // ──────────────────────────────────────────────────────────────────
     case "awaiting_hotspot_username": {
       const raw = sanitizeUsername(message);
+      if (/^\d+$/.test(raw)) {
+        await sock.sendMessage(from, {
+          text:
+            `❌ Usernames cannot be numbers only.\n\n` +
+            `Please include at least one letter. Example: \`john2024\`\n\nTry again:`,
+        });
+        break;
+      }
       if (!isValidUsername(raw)) {
         await sock.sendMessage(from, {
           text:
-            `❌ Invalid username. Please use only *letters, numbers, or underscores* (3–20 chars).\n\n` +
+            `❌ Invalid username. Use only *letters, numbers, or underscores* (3–20 chars).\n\n` +
             `Example: \`john2024\`\n\nTry again:`,
         });
         break;
@@ -934,6 +944,14 @@ export async function handleMessage(
       }
 
       const raw = sanitizeUsername(message);
+      if (/^\d+$/.test(raw)) {
+        await sock.sendMessage(from, {
+          text:
+            `❌ Usernames cannot be numbers only.\n\n` +
+            `Please include at least one letter. Example: \`john2024\`\n\nTry again or reply *0* to cancel:`,
+        });
+        break;
+      }
       if (!isValidUsername(raw)) {
         await sock.sendMessage(from, {
           text: `❌ Invalid username. Letters/numbers/underscore only, 3–20 chars.\n\nTry again or reply *0* to cancel:`,
