@@ -13,7 +13,7 @@ import { enqueueProvisioning } from './provisioningQueue.js';
 export async function fulfillPayment(db, sock, user) {
     // Use the exact JID stored from the user's last message — avoids LID/phone mismatch
     const sessionRes = await db.query(
-        `SELECT plan_id, remote_jid FROM whatsapp_sessions WHERE phone = $1`,
+        `SELECT plan_id, remote_jid, gift_target_user_id FROM whatsapp_sessions WHERE phone = $1`,
         [user.phone]
     );
     const session   = sessionRes.rows[0];
