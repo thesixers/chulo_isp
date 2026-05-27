@@ -12,6 +12,9 @@
  *   !broadcast <msg>             — send a message to all active subscribers
  */
 
+import { provisionOrQueue } from './fulfillPayment.js';
+
+const adminSessions = new Map();
 const PAGE_SIZE = 5;
 
 function fmt(date) {
@@ -24,6 +27,12 @@ export async function handleAdminMessage(sock, from, text, db) {
     const raw   = text.trim();
     const parts = raw.split(/\s+/);
     const cmd   = parts[0].toLowerCase();
+
+    // ── Check for active admin session (e.g. multi-step !activate) ─────────
+    const session = adminSessions.get(from);
+    if (session && !cmd.startsWith('!')) {
+        return handleAdminSession(sock, from, raw, db, session);
+    }
 
     // ── Admin help menu ────────────────────────────────────────────────────
     if (cmd === '!help' || cmd === '!admin') {
@@ -41,6 +50,8 @@ export async function handleAdminMessage(sock, from, text, db) {
                 `   All payments (paginated) or payments for a specific user\n\n` +
                 `📋 !subscriptions [page | username]\n` +
                 `   All subscriptions (paginated) or subs for a specific user\n\n` +
+                `⚡ !activate <username>\n` +
+                `   Manually activate a plan for a user (cash payment)\n\n` +
                 `📢 !broadcast <message>\n` +
                 `   Send message to all active subscribers`,
         });
@@ -417,6 +428,50 @@ export async function handleAdminMessage(sock, from, text, db) {
         return true;
     }
 
+    // ── Admin activate (manual cash payment) ───────────────────────────────
+    if (cmd === '!activate') {
+        const targetUsername = parts[1];
+        if (!targetUsername) {
+            await sock.sendMessage(from, { text: `Usage: *!activate <username>*` });
+            return true;
+        }
+
+        const targetRes = await db.query(
+            `SELECT * FROM users WHERE LOWER(hotspot_username) = LOWER($1)`,
+            [targetUsername]
+        );
+
+        if (!targetRes.rows.length) {
+            await sock.sendMessage(from, { text: `❌ User *${targetUsername}* not found.` });
+            return true;
+        }
+
+        adminSessions.set(from, {
+            step: 'awaiting_device_selection',
+            targetUser: targetRes.rows[0]
+        });
+
+        await sock.sendMessage(from, {
+            text: `✅ Activating for *${targetRes.rows[0].hotspot_username}*\n\n` +
+                  `*Select Device Limit:*\n` +
+                  `1️⃣ Single Device\n` +
+                  `2️⃣ Two Devices\n` +
+                  `3️⃣ Three Devices\n\n` +
+                  `Reply with a number (1-3) or type !cancel.`
+        });
+        return true;
+    }
+
+    if (cmd === '!cancel') {
+        if (adminSessions.has(from)) {
+            adminSessions.delete(from);
+            await sock.sendMessage(from, { text: `✅ Action cancelled.` });
+        } else {
+            await sock.sendMessage(from, { text: `No active action to cancel.` });
+        }
+        return true;
+    }
+
     // Not an admin command (starts with ! but unrecognised)
     if (cmd.startsWith('!')) {
         await sock.sendMessage(from, {
@@ -427,4 +482,146 @@ export async function handleAdminMessage(sock, from, text, db) {
 
     // Not an admin command — let normal flow handle it
     return false;
+}
+
+// ── Multi-step session handler for Admin commands ──────────────────────────
+async function handleAdminSession(sock, from, text, db, session) {
+    const { step, targetUser } = session;
+
+    if (step === 'awaiting_device_selection') {
+        const profileMap = {
+            '1': { profile: '7/7_Mbps_1Users', label: 'Single Device' },
+            '2': { profile: '7/7_Mbps_2Users', label: 'Two Devices' },
+            '3': { profile: '7/7_Mbps_3Users', label: 'Three Devices' }
+        };
+        const choice = profileMap[text];
+        if (!choice) {
+            await sock.sendMessage(from, { text: `Please reply with 1, 2, or 3. (Or type !cancel)` });
+            return true;
+        }
+
+        const res = await db.query(
+            `SELECT * FROM plans WHERE mikrotik_profile = $1 ORDER BY duration_days DESC`,
+            [choice.profile]
+        );
+
+        adminSessions.set(from, {
+            ...session,
+            step: 'awaiting_plan_selection',
+            plans: res.rows
+        });
+
+        const lines = res.rows.map((p, i) =>
+            `${i + 1}️⃣ *${p.name}* — ₦${Number(p.price).toLocaleString()}`
+        ).join('\n');
+
+        await sock.sendMessage(from, {
+            text: `*Select Plan for ${choice.label}:*\n\n${lines}\n\nReply with a number (1-${res.rows.length}).`
+        });
+        return true;
+    }
+
+    if (step === 'awaiting_plan_selection') {
+        const position = parseInt(text, 10);
+        const { plans } = session;
+        if (isNaN(position) || position < 1 || position > plans.length) {
+            await sock.sendMessage(from, { text: `Please reply with a valid number from the list. (Or type !cancel)` });
+            return true;
+        }
+
+        const plan = plans[position - 1];
+        adminSessions.delete(from); // Clear session early
+
+        await sock.sendMessage(from, { text: `⏳ Activating *${plan.name}* for *${targetUser.hotspot_username}*...` });
+
+        try {
+            // 1. Create a "cash" payment
+            await db.query(`
+                INSERT INTO payments (user_id, amount, status, provider, method, paid_at)
+                VALUES ($1, $2, 'completed', 'admin_manual', 'cash', CURRENT_TIMESTAMP)
+            `, [targetUser.id, plan.price]);
+
+            // 2. Fetch active sub to determine if queueing is needed
+            const activeSubRes = await db.query(`
+                SELECT s.*, p.duration_days AS active_duration_days FROM subscriptions s
+                JOIN plans p ON p.id = s.plan_id
+                WHERE s.user_id = $1 AND s.status = 'active' AND s.expiry_time > CURRENT_TIMESTAMP
+                ORDER BY s.expiry_time DESC LIMIT 1
+            `, [targetUser.id]);
+
+            const activeSub = activeSubRes.rows[0];
+            const isRenewal = !!activeSub;
+            const renewingEarly = isRenewal && new Date(activeSub.expiry_time) > new Date();
+
+            function sameTierBonus(activeDays, newDays) {
+                if (activeDays >= 28 && newDays >= 28) return 3;
+                if (activeDays >= 7 && newDays >= 7 && activeDays < 28 && newDays < 28) return 1;
+                return 0;
+            }
+            const bonusDays = renewingEarly ? sameTierBonus(activeSub.active_duration_days, plan.duration_days) : 0;
+
+            let newExpiry = new Date();
+            if (isRenewal) newExpiry = new Date(activeSub.expiry_time);
+            newExpiry.setDate(newExpiry.getDate() + plan.duration_days + bonusDays);
+
+            if (isRenewal) {
+                await db.query(`
+                    INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time, alert_sent)
+                    VALUES ($1, $2, 'queued', $3, $4, false)
+                `, [targetUser.id, plan.id, activeSub.expiry_time, newExpiry]);
+            } else {
+                await db.query(`
+                    INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time, alert_sent)
+                    VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3, false)
+                `, [targetUser.id, plan.id, newExpiry]);
+            }
+
+            // 3. Notify Admin
+            await sock.sendMessage(from, {
+                text: `✅ Successfully activated *${plan.name}* for *${targetUser.hotspot_username}*.\n` +
+                      (isRenewal ? `⏳ Plan was queued to start on ${new Date(activeSub.expiry_time).toDateString()}.` : `📡 Plan is now active.`)
+            });
+
+            // 4. Notify User
+            const targetJidRes = await db.query(`SELECT remote_jid FROM whatsapp_sessions WHERE phone = $1`, [targetUser.phone]);
+            const targetJid = targetJidRes.rows[0]?.remote_jid || `${targetUser.phone}@s.whatsapp.net`;
+
+            try {
+                if (isRenewal) {
+                    await sock.sendMessage(targetJid, {
+                        text: `✅ *Your plan has been activated!* (by Admin)\n\n` +
+                              `📡 Plan: *${plan.name}*\n` +
+                              `⏳ *Queued* — activates on *${new Date(activeSub.expiry_time).toDateString()}* when your current plan expires.` +
+                              (bonusDays > 0 ? `\n🎁 *+${bonusDays} free day${bonusDays > 1 ? 's' : ''} added!* 🎉` : '')
+                    });
+                } else {
+                    await sock.sendMessage(targetJid, {
+                        text: `✅ *Your plan has been activated!* (by Admin)\n\n` +
+                              `📡 Plan: *${plan.name}*\n` +
+                              `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
+                              `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`
+                    });
+                }
+            } catch (err) {
+                console.error("Failed to notify user of admin activation:", err.message);
+            }
+
+            // 5. Provision if not queued
+            if (!isRenewal && targetUser.hotspot_username && targetUser.hotspot_password) {
+                await provisionOrQueue(db, sock, targetUser, plan, targetJid, targetUser.hotspot_username, targetUser.hotspot_password, false, newExpiry);
+            } else if (!isRenewal) {
+                 // User doesn't have credentials yet, tell admin they need to log in to the bot
+                 await sock.sendMessage(from, {
+                    text: `⚠️ *Note:* User *${targetUser.hotspot_username}* hasn't set up their MikroTik credentials yet. They need to reply to the bot to finish setup.`
+                 });
+            }
+
+        } catch (err) {
+            console.error("Admin activation failed:", err);
+            await sock.sendMessage(from, { text: `❌ Failed to activate plan: ${err.message}` });
+        }
+        return true;
+    }
+
+    return true;
 }

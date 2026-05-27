@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS payments (
     amount INTEGER,
     status payment_status DEFAULT 'pending',
     provider VARCHAR(225),
+    method VARCHAR(20) DEFAULT 'transfer',  -- 'transfer' | 'cash' (admin manual activation)
     virtual_account_reference VARCHAR(100) UNIQUE, -- UUID from FLW dynamic VA; used for webhook lookup
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     paid_at TIMESTAMP
