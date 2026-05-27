@@ -142,11 +142,14 @@ export async function handleAdminMessage(sock, from, text, db) {
 
             [res, totalRes] = await Promise.all([
                 db.query(`
-                    SELECT p.amount, p.status, p.paid_at, p.created_at, pl.name AS plan_name
+                    SELECT p.amount, p.status, p.paid_at, p.created_at,
+                           (SELECT pl.name FROM subscriptions s
+                            JOIN plans pl ON pl.id = s.plan_id
+                            WHERE s.user_id = p.user_id
+                            AND s.created_at >= p.created_at
+                            ORDER BY s.created_at ASC LIMIT 1
+                           ) AS plan_name
                     FROM payments p
-                    LEFT JOIN subscriptions s ON s.user_id = p.user_id
-                        AND s.created_at >= p.created_at
-                    LEFT JOIN plans pl ON pl.id = s.plan_id
                     WHERE p.user_id = $1
                     ORDER BY p.created_at DESC
                     LIMIT $2 OFFSET $3
