@@ -671,12 +671,11 @@ export async function handleMessage(
         return;
       }
 
-      // For cross-profile check: use the TARGET user's active sub (not User A's)
+      // For queue check: use the TARGET user's active sub (not User A's)
       const subCheckUserId = session.gift_target_user_id || user.id;
       const activeSub = await getActiveSubscription(db, subCheckUserId);
-      const isCrossProfile =
-        activeSub &&
-        activeSub.mikrotik_profile !== selectedPlan.mikrotik_profile;
+      // ANY active sub means the new plan gets queued (same or different device tier)
+      const willBeQueued = !!activeSub;
 
       const isGift = !!session.gift_target_user_id;
       const giftTarget = isGift
@@ -719,11 +718,11 @@ export async function handleMessage(
           ? `This plan will be gifted to *${giftTarget?.hotspot_username}* and activates automatically once payment is received! 🎁`
           : `Your plan activates automatically once payment is received! 🎉`;
 
-        if (isCrossProfile) {
+        if (willBeQueued) {
           const expiryStr = fmt(activeSub.expiry_time);
           noticeText = isGift
-            ? `⚠️ *Important Notice*\n*${giftTarget?.hotspot_username}* already has an active plan for a different device limit. The new *${selectedPlan.name}* plan will be queued and activates AFTER their current plan expires on *${expiryStr}*.`
-            : `⚠️ *Important Notice*\nYou currently have an active plan for a different device limit. Your new *${selectedPlan.name}* plan will be queued and will automatically activate AFTER your current plan expires on *${expiryStr}*.`;
+            ? `⚠️ *Important Notice*\n*${giftTarget?.hotspot_username}* already has an active plan. The new *${selectedPlan.name}* plan will be queued and activates AFTER their current plan expires on *${expiryStr}*.`
+            : `⚠️ *Important Notice*\nYou currently have an active plan. Your new *${selectedPlan.name}* plan will be queued and will automatically activate AFTER your current plan expires on *${expiryStr}*.⏳`;
         }
 
         await sock.sendMessage(from, {
