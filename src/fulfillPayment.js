@@ -71,7 +71,7 @@ export async function fulfillPayment(db, sock, user) {
 
     // 4. Calculate subscription expiry (extend from target user's active sub if renewal/gift)
     const activeSubRes = await db.query(`
-        SELECT s.*, p.mikrotik_profile FROM subscriptions s
+        SELECT s.*, p.mikrotik_profile, p.duration_days AS active_duration_days FROM subscriptions s
         JOIN plans p ON p.id = s.plan_id
         WHERE s.user_id = $1 AND s.status = 'active' AND s.expiry_time > CURRENT_TIMESTAMP
         ORDER BY s.expiry_time DESC LIMIT 1
@@ -82,12 +82,26 @@ export async function fulfillPayment(db, sock, user) {
     const isCrossProfile = isRenewal && activeSub.mikrotik_profile !== plan.mikrotik_profile;
 
     const renewingEarly = isRenewal && !isCrossProfile && new Date(activeSub.expiry_time) > new Date();
-    // Loyalty bonus: monthly plans get 3 free days, weekly/3-day get 1 free day (1-day plans excluded, cross-profile excluded)
-    const bonusDays = renewingEarly ? (plan.duration_days >= 28 ? 3 : plan.duration_days >= 7 ? 1 : 0) : 0;
+
+    // Loyalty bonus rules (both active plan AND new plan must share the same duration tier):
+    //   Monthly → Monthly  : +3 days
+    //   Weekly  → Weekly   : +1 day
+    //   Any tier change    : 0  (e.g. weekly→monthly or monthly→weekly)
+    //   Short plans (<7d)  : 0  always
+    function sameTierBonus(activeDays, newDays) {
+        if (activeDays >= 28 && newDays >= 28) return 3;   // monthly → monthly
+        if (activeDays >= 7  && newDays >= 7
+            && activeDays < 28 && newDays < 28) return 1;  // weekly  → weekly
+        return 0;
+    }
+    const bonusDays = renewingEarly
+        ? sameTierBonus(activeSub.active_duration_days, plan.duration_days)
+        : 0;
 
     let newExpiry = new Date();
     if (isRenewal) newExpiry = new Date(activeSub.expiry_time);
     newExpiry.setDate(newExpiry.getDate() + plan.duration_days + bonusDays);
+
 
     // 5. Create the subscription record (always on targetUser's account)
     if (isCrossProfile) {
