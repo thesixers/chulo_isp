@@ -71,6 +71,11 @@ async function sendExpiryAlerts(db, getSock) {
               AND s.expiry_time > NOW()
               AND s.alert_sent = false
               AND ws.remote_jid IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM subscriptions sq
+                  WHERE sq.user_id = s.user_id
+                  AND sq.status = 'queued'
+              )
         `);
 
         const sock = getSock();

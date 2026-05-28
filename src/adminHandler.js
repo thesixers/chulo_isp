@@ -608,7 +608,7 @@ async function handleAdminSession(sock, from, text, db, session) {
 
             // 5. Provision if not queued
             if (!isRenewal && targetUser.hotspot_username && targetUser.hotspot_password) {
-                await provisionOrQueue(db, sock, targetUser, plan, targetJid, targetUser.hotspot_username, targetUser.hotspot_password, false, newExpiry);
+                await provisionOrQueue(db, sock, targetUser, plan, targetJid, targetUser.hotspot_username, targetUser.hotspot_password, false, newExpiry, true);
             } else if (!isRenewal) {
                  // User doesn't have credentials yet, tell admin they need to log in to the bot
                  await sock.sendMessage(from, {

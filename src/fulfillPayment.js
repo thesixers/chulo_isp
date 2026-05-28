@@ -182,7 +182,7 @@ export async function fulfillPayment(db, sock, user) {
             `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL, gift_target_user_id = NULL WHERE phone = $1`,
             [user.phone]
         );
-        await provisionOrQueue(db, sock, targetUser, plan, remoteJid, targetUser.hotspot_username, targetUser.hotspot_password, false, newExpiry);
+        await provisionOrQueue(db, sock, targetUser, plan, remoteJid, targetUser.hotspot_username, targetUser.hotspot_password, false, newExpiry, isGift);
     } else {
         // ── FIRST TIME (no credentials yet): ask the payer to set up credentials ──
         // This only applies if the target has never set up their account
@@ -218,7 +218,7 @@ function promoTip(durationDays) {
 /**
  * Provisions the user on MikroTik or queues for retry on failure.
  */
-export async function provisionOrQueue(db, sock, user, plan, remoteJid, username, password, isRenewal, expiryTime = null) {
+export async function provisionOrQueue(db, sock, user, plan, remoteJid, username, password, isRenewal, expiryTime = null, suppressSuccessMessage = false) {
     try {
         const comment = expiryTime ? buildMikrotikComment(user.phone, plan.duration_days, expiryTime) : null;
         await provisionHotspotUser(username, plan.mikrotik_profile, password, comment);
@@ -229,28 +229,30 @@ export async function provisionOrQueue(db, sock, user, plan, remoteJid, username
             [username, password, user.id]
         );
 
-        if (isRenewal) {
-            await sock.sendMessage(remoteJid, {
-                text:
-                    `🎉 *You're back online!*\n\n` +
-                    `🌐 *Your Starlink Login*\n` +
-                    `Username: \`${username}\`\n` +
-                    `Password: \`${password}\`\n\n` +
-                    `Connect at: *http://10.5.50.1*\n` +
-                    `Enjoy your internet! 🛰️` +
-                    promoTip(plan.duration_days),
-            });
-        } else {
-            await sock.sendMessage(remoteJid, {
-                text:
-                    `🎉 *Your Chulo ISP account is ready!*\n\n` +
-                    `🌐 *Login Details*\n` +
-                    `Username: \`${username}\`\n` +
-                    `Password: \`${password}\`\n\n` +
-                    `Connect at: *http://10.5.50.1*\n\n` +
-                    `Welcome to Chulo ISP! 🛰️` +
-                    promoTip(plan.duration_days),
-            });
+        if (!suppressSuccessMessage) {
+            if (isRenewal) {
+                await sock.sendMessage(remoteJid, {
+                    text:
+                        `🎉 *You're back online!*\n\n` +
+                        `🌐 *Your Starlink Login*\n` +
+                        `Username: \`${username}\`\n` +
+                        `Password: \`${password}\`\n\n` +
+                        `Connect at: *http://10.5.50.1*\n` +
+                        `Enjoy your internet! 🛰️` +
+                        promoTip(plan.duration_days),
+                });
+            } else {
+                await sock.sendMessage(remoteJid, {
+                    text:
+                        `🎉 *Your Chulo ISP account is ready!*\n\n` +
+                        `🌐 *Login Details*\n` +
+                        `Username: \`${username}\`\n` +
+                        `Password: \`${password}\`\n\n` +
+                        `Connect at: *http://10.5.50.1*\n\n` +
+                        `Welcome to Chulo ISP! 🛰️` +
+                        promoTip(plan.duration_days),
+                });
+            }
         }
 
     } catch (err) {
