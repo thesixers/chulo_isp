@@ -550,7 +550,7 @@ async function handleAdminSession(sock, from, text, db, session) {
             const activeSubRes = await db.query(`
                 SELECT s.*, p.duration_days AS active_duration_days FROM subscriptions s
                 JOIN plans p ON p.id = s.plan_id
-                WHERE s.user_id = $1 AND s.status = 'active' AND s.expiry_time > CURRENT_TIMESTAMP
+                WHERE s.user_id = $1 AND s.status IN ('active', 'queued') AND s.expiry_time > CURRENT_TIMESTAMP
                 ORDER BY s.expiry_time DESC LIMIT 1
             `, [targetUser.id]);
 
