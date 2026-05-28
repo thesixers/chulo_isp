@@ -72,13 +72,13 @@ async function processJob(db, sock, job) {
 
         await sock.sendMessage(job.remote_jid, {
             text:
-                `🎉 *Your Chulo ISP account is ready!*\n\n` +
+                `🎉 *Your Chulo Speednet account is ready!*\n\n` +
                 `📡 Plan: *${job.plan_name}*\n\n` +
                 `🌐 *Login Details*\n` +
                 `Username: \`${job.phone}\`\n` +
                 `Password: \`${job.pin}\`\n\n` +
-                `Connect at: *http://10.5.50.1*\n\n` +
-                `Welcome to Chulo ISP! 🛰️`,
+                `Connect at: *http://10.5.50.1/*\n\n` +
+                `Welcome to Chulo Speednet! 🛰️`,
         });
 
     } catch (err) {

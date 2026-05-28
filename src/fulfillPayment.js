@@ -244,12 +244,12 @@ export async function provisionOrQueue(db, sock, user, plan, remoteJid, username
             } else {
                 await sock.sendMessage(remoteJid, {
                     text:
-                        `🎉 *Your Chulo ISP account is ready!*\n\n` +
+                        `🎉 *Your Chulo Speednet account is ready!*\n\n` +
                         `🌐 *Login Details*\n` +
                         `Username: \`${username}\`\n` +
                         `Password: \`${password}\`\n\n` +
-                        `Connect at: *http://10.5.50.1*\n\n` +
-                        `Welcome to Chulo ISP! 🛰️` +
+                        `Connect at: *http://10.5.50.1/*\n\n` +
+                        `Welcome to Chulo Speednet! 🛰️` +
                         promoTip(plan.duration_days),
                 });
             }

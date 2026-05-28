@@ -59,7 +59,7 @@ async function startBot() {
   );
 }
 
-app.get("/", () => "Welcome to Chulo ISP");
+app.get("/", () => "Welcome to Chulo Speednet");
 
 // Test endpoint — hit this to verify proactive WhatsApp sends work
 // Usage: curl http://localhost:3003/test-send

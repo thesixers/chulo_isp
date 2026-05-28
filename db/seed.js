@@ -13,7 +13,7 @@ async function seed() {
         console.log("🌱 Truncating old plans...");
         await db.query('TRUNCATE TABLE plans RESTART IDENTITY CASCADE;');
 
-        console.log("🌱 Inserting Chulo ISP plans...");
+        console.log("🌱 Inserting Chulo Speednet plans...");
         await db.query(`
             INSERT INTO plans (name, price, duration_days, mikrotik_profile) VALUES
             -- Single device (7/7_Mbps_1Users)
