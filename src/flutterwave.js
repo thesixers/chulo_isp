@@ -40,7 +40,7 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
                 tx_ref: txRef,
                 amount,
                 currency: 'NGN',
-                narration: `Chulo ISP - ${planName}`,
+                narration: `Chulo Speednet - ${planName}`,
                 phonenumber: phone,
                 firstname: 'Chulo',
                 lastname: 'User',
