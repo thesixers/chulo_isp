@@ -62,7 +62,7 @@ export async function handleAdminMessage(sock, from, text, db) {
     if (cmd === '!stats') {
         const [totalUsersRes, activeSubsRes, queuedSubsRes, revenueRes, pendingProvRes] = await Promise.all([
             db.query(`SELECT COUNT(*) FROM users`),
-            db.query(`SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND expiry_time > NOW()`),
+            db.query(`SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active' AND expiry_time > NOW()`),
             db.query(`SELECT COUNT(*) FROM subscriptions WHERE status = 'queued'`),
             db.query(`SELECT COALESCE(SUM(amount), 0) AS total FROM payments WHERE status = 'completed'`),
             db.query(`SELECT COUNT(*) FROM provisioning_queue WHERE status = 'pending'`),
@@ -91,8 +91,13 @@ export async function handleAdminMessage(sock, from, text, db) {
                    s.status AS sub_status, s.expiry_time,
                    pl.name AS plan_name
             FROM users u
-            LEFT JOIN subscriptions s ON s.user_id = u.id
-                AND s.status = 'active' AND s.expiry_time > NOW()
+            LEFT JOIN LATERAL (
+                SELECT sub.status, sub.expiry_time, sub.plan_id
+                FROM subscriptions sub
+                WHERE sub.user_id = u.id AND sub.status = 'active' AND sub.expiry_time > NOW()
+                ORDER BY sub.expiry_time DESC
+                LIMIT 1
+            ) s ON true
             LEFT JOIN plans pl ON pl.id = s.plan_id
             ORDER BY u.created_at DESC
             LIMIT $1 OFFSET $2
