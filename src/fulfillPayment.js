@@ -192,14 +192,14 @@ export async function fulfillPayment(db, sock, user) {
             WHERE phone = $2
         `, [plan.id, user.phone]);
 
-        await sock.sendMessage(remoteJid, {
+        await sock.sendMessage(remoteJid, { 
             text:
                 `🔐 *Set Up Hotspot Login for ${isGift ? targetUser.hotspot_username || 'the recipient' : 'You'}*\n\n` +
                 `Please choose a *username* for the internet connection.\n\n` +
                 `Rules:\n` +
                 `• Letters and numbers only (no emojis or spaces)\n` +
                 `• 3–20 characters\n` +
-                `• Example: \`john2024\`\n\n` +
+                `• Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\n` +
                 `Reply with your desired username:`,
         });
     }

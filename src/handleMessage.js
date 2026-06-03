@@ -832,7 +832,7 @@ export async function handleMessage(
         await sock.sendMessage(from, {
           text:
             `❌ Usernames cannot be numbers only.\n\n` +
-            `Please include at least one letter. Example: \`john2024\`\n\nTry again:`,
+            `Please include at least one letter. Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again:`,
         });
         break;
       }
@@ -840,7 +840,7 @@ export async function handleMessage(
         await sock.sendMessage(from, {
           text:
             `❌ Invalid username. Use only *letters, numbers, or underscores* (3–20 chars).\n\n` +
-            `Example: \`john2024\`\n\nTry again:`,
+            `Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again:`,
         });
         break;
       }
@@ -946,7 +946,7 @@ export async function handleMessage(
         await sock.sendMessage(from, {
           text:
             `❌ Usernames cannot be numbers only.\n\n` +
-            `Please include at least one letter. Example: \`john2024\`\n\nTry again or reply *0* to cancel:`,
+            `Please include at least one letter. Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again or reply *0* to cancel:`,
         });
         break;
       }
