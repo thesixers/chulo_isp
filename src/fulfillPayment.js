@@ -79,11 +79,23 @@ export async function fulfillPayment(db, sock, user) {
         return;
     }
 
-    // 4. Mark payment as completed (only reached if Flutterwave confirmed it)
-    await db.query(
-        `UPDATE payments SET status = 'completed', paid_at = CURRENT_TIMESTAMP WHERE id = $1`,
+    // 4. Atomically mark payment as completed — this is the single gate that prevents
+    //    double-fulfillment. If the webhook and the manual PAID check run at the same
+    //    time, only one will get rowCount > 0 here. The other sees 0 and bails out.
+    const claimRes = await db.query(
+        `UPDATE payments SET status = 'completed', paid_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND status = 'pending'
+         RETURNING id`,
         [payment.id]
     );
+    if (claimRes.rowCount === 0) {
+        // Another process (webhook or concurrent manual check) already fulfilled this payment
+        console.log(`⚠️ fulfillPayment: payment ${payment.id} already processed — skipping duplicate`);
+        await sock.sendMessage(remoteJid, {
+            text: `✅ Your payment has already been processed! Check your subscription with option *4* from the main menu.`,
+        });
+        return;
+    }
 
     // 4. Calculate subscription expiry (extend from target user's active sub if renewal/gift)
     const activeSubRes = await db.query(`

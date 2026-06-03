@@ -52,6 +52,8 @@ export async function handleAdminMessage(sock, from, text, db) {
                 `   All subscriptions (paginated) or subs for a specific user\n\n` +
                 `⚡ !activate <username>\n` +
                 `   Manually activate a plan for a user (cash payment)\n\n` +
+                `🗑️ !delsub <username>\n` +
+                `   Delete a subscription for a user (active or queued)\n\n` +
                 `📢 !broadcast <message>\n` +
                 `   Send message to all active subscribers`,
         });
@@ -467,6 +469,59 @@ export async function handleAdminMessage(sock, from, text, db) {
         return true;
     }
 
+    // ── Delete a subscription ──────────────────────────────────────────────
+    if (cmd === '!delsub') {
+        const targetUsername = parts[1];
+        if (!targetUsername) {
+            await sock.sendMessage(from, { text: `Usage: *!delsub <username>*  e.g. !delsub emeka` });
+            return true;
+        }
+
+        const targetRes = await db.query(
+            `SELECT * FROM users WHERE LOWER(hotspot_username) = LOWER($1)`,
+            [targetUsername]
+        );
+        if (!targetRes.rows.length) {
+            await sock.sendMessage(from, { text: `❌ No user found with username *${targetUsername}*.` });
+            return true;
+        }
+        const targetUser = targetRes.rows[0];
+
+        // Fetch all active and queued subscriptions
+        const subsRes = await db.query(`
+            SELECT s.id, s.status, s.start_time, s.expiry_time, p.name AS plan_name
+            FROM subscriptions s
+            JOIN plans p ON p.id = s.plan_id
+            WHERE s.user_id = $1 AND s.status IN ('active', 'queued')
+            ORDER BY s.expiry_time ASC
+        `, [targetUser.id]);
+
+        if (!subsRes.rows.length) {
+            await sock.sendMessage(from, { text: `ℹ️ *${targetUser.hotspot_username}* has no active or queued subscriptions.` });
+            return true;
+        }
+
+        const statusIcon = (s) => s === 'active' ? '🟢' : '⏳';
+        const lines = subsRes.rows.map((s, i) =>
+            `${i + 1}. ${statusIcon(s.status)} *${s.plan_name}* (${s.status})\n` +
+            `   📅 ${fmt(s.start_time)} → ${fmt(s.expiry_time)}`
+        ).join('\n\n');
+
+        adminSessions.set(from, {
+            step: 'awaiting_sub_selection',
+            targetUser,
+            subs: subsRes.rows,
+        });
+
+        await sock.sendMessage(from, {
+            text:
+                `🗑️ *Delete Subscription for ${targetUser.hotspot_username}*\n\n` +
+                `${lines}\n\n` +
+                `Reply with the *number* of the plan to delete, or type *!cancel*.`,
+        });
+        return true;
+    }
+
     if (cmd === '!cancel') {
         if (adminSessions.has(from)) {
             adminSessions.delete(from);
@@ -624,6 +679,112 @@ async function handleAdminSession(sock, from, text, db, session) {
         } catch (err) {
             console.error("Admin activation failed:", err);
             await sock.sendMessage(from, { text: `❌ Failed to activate plan: ${err.message}` });
+        }
+        return true;
+    }
+
+    if (step === 'awaiting_sub_selection') {
+        const { subs, targetUser } = session;
+        const position = parseInt(text, 10);
+        if (isNaN(position) || position < 1 || position > subs.length) {
+            await sock.sendMessage(from, { text: `Please reply with a number between 1 and ${subs.length}. (Or type !cancel)` });
+            return true;
+        }
+
+        const sub = subs[position - 1];
+        const statusIcon = sub.status === 'active' ? '🟢 Active' : '⏳ Queued';
+
+        adminSessions.set(from, {
+            step: 'awaiting_delsub_confirm',
+            targetUser,
+            sub,
+        });
+
+        await sock.sendMessage(from, {
+            text:
+                `⚠️ *Confirm Deletion*\n\n` +
+                `User: *${targetUser.hotspot_username}*\n` +
+                `Plan: *${sub.plan_name}*\n` +
+                `Status: *${statusIcon}*\n` +
+                `Period: ${fmt(sub.start_time)} → ${fmt(sub.expiry_time)}\n\n` +
+                (sub.status === 'active'
+                    ? `🔴 This will *cut their internet immediately* and remove them from MikroTik.\n\n`
+                    : `ℹ️ This plan is queued and not yet active — no internet will be cut.\n\n`) +
+                `Reply *YES* to confirm or *NO* to cancel.`,
+        });
+        return true;
+    }
+
+    if (step === 'awaiting_delsub_confirm') {
+        const { targetUser, sub } = session;
+
+        if (text.toLowerCase() !== 'yes') {
+            adminSessions.delete(from);
+            await sock.sendMessage(from, { text: `❌ Deletion cancelled.` });
+            return true;
+        }
+
+        adminSessions.delete(from);
+
+        try {
+            // 1. Delete subscription from DB
+            await db.query(`DELETE FROM subscriptions WHERE id = $1`, [sub.id]);
+
+            // 2. If active — remove from MikroTik immediately
+            if (sub.status === 'active' && targetUser.hotspot_username) {
+                try {
+                    const { RouterOSAPI } = await import('node-routeros');
+                    const apiConn = new RouterOSAPI({
+                        host: process.env.MIKROTIK_TUNNEL_IP,
+                        user: process.env.MIKROTIK_USER,
+                        password: process.env.MIKROTIK_PASS,
+                        port: parseInt(process.env.MIKROTIK_PORT) || 8728,
+                        timeout: 10,
+                    });
+                    await apiConn.connect();
+                    try {
+                        await apiConn.write('/ip/hotspot/user/remove', [
+                            `=numbers=${targetUser.hotspot_username}`,
+                        ]);
+                    } catch (_) { /* user may not exist on router — ignore */ }
+                    apiConn.close();
+                } catch (mikrotikErr) {
+                    console.error('MikroTik removal failed during !delsub:', mikrotikErr.message);
+                    await sock.sendMessage(from, {
+                        text: `⚠️ Subscription deleted from DB but *could not remove from MikroTik*: ${mikrotikErr.message}\nYou may need to remove *${targetUser.hotspot_username}* manually from the router.`,
+                    });
+                }
+            }
+
+            // 3. Confirm to admin
+            await sock.sendMessage(from, {
+                text:
+                    `✅ *Subscription Deleted*\n\n` +
+                    `User: *${targetUser.hotspot_username}*\n` +
+                    `Plan: *${sub.plan_name}*\n` +
+                    (sub.status === 'active' ? `🔴 Removed from MikroTik — internet access cut.` : `ℹ️ Queued plan removed — no internet disruption.`),
+            });
+
+            // 4. Notify user
+            try {
+                const targetJidRes = await db.query(
+                    `SELECT remote_jid FROM whatsapp_sessions WHERE phone = $1`,
+                    [targetUser.phone]
+                );
+                const targetJid = targetJidRes.rows[0]?.remote_jid || `${targetUser.phone}@s.whatsapp.net`;
+                await sock.sendMessage(targetJid, {
+                    text:
+                        sub.status === 'active'
+                            ? `ℹ️ *Notice from Chulo Speednet*\n\nYour *${sub.plan_name}* plan has been removed by an admin.\n\nIf you believe this is a mistake, please contact support.`
+                            : `ℹ️ *Notice from Chulo Speednet*\n\nYour queued *${sub.plan_name}* plan has been cancelled by an admin.\n\nIf you believe this is a mistake, please contact support.`,
+                });
+            } catch (notifyErr) {
+                console.error('Failed to notify user after !delsub:', notifyErr.message);
+            }
+
+        } catch (err) {
+            console.error('!delsub failed:', err.message);
+            await sock.sendMessage(from, { text: `❌ Failed to delete subscription: ${err.message}` });
         }
         return true;
     }
