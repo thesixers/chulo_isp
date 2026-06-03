@@ -69,3 +69,33 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
     }
     throw lastError;
 }
+
+/**
+ * Verifies whether a Flutterwave virtual account transaction was actually paid.
+ *
+ * @param {string} txRef   - The tx_ref UUID stored on the payments row
+ * @param {number} amount  - Expected amount in NGN (guards against partial payments)
+ * @returns {Promise<boolean>} true only when a successful, full-amount transaction exists
+ */
+export async function verifyPayment(txRef, amount) {
+    try {
+        const response = await flw.get('/transactions', {
+            params: { tx_ref: txRef },
+        });
+
+        const transactions = response.data?.data || [];
+        const match = transactions.find(
+            (t) =>
+                t.tx_ref === txRef &&
+                t.status === 'successful' &&
+                t.currency === 'NGN' &&
+                Number(t.amount) >= Number(amount),
+        );
+
+        return !!match;
+    } catch (err) {
+        console.error('Flutterwave verification error:', err.response?.data || err.message);
+        // On API/network error return false — never falsely confirm an unpaid transaction
+        return false;
+    }
+}

@@ -1,5 +1,6 @@
 import { provisionHotspotUser, buildMikrotikComment } from './mikrotik.js';
 import { enqueueProvisioning } from './provisioningQueue.js';
+import { verifyPayment } from './flutterwave.js';
 
 /**
  * Fulfills a confirmed payment:
@@ -45,7 +46,7 @@ export async function fulfillPayment(db, sock, user) {
         return;
     }
 
-    // 2. Get the plan from the session
+    // 2. Get the plan from the session (needed to know the expected amount)
     const planId = session?.plan_id;
     if (!planId) {
         await sock.sendMessage(remoteJid, {
@@ -63,7 +64,22 @@ export async function fulfillPayment(db, sock, user) {
         return;
     }
 
-    // 3. Mark payment as completed
+    // 3. Verify with Flutterwave that payment was actually received
+    const paid = await verifyPayment(payment.virtual_account_reference, plan.price);
+    if (!paid) {
+        await sock.sendMessage(remoteJid, {
+            text:
+                `⏳ *Payment Not Yet Received*\n\n` +
+                `We checked with our payment provider and your transfer hasn't been confirmed yet.\n\n` +
+                `• Please wait a few minutes and try again\n` +
+                `• Make sure you transferred to the correct account number\n` +
+                `• Reply *PAID* once your bank confirms the transfer\n\n` +
+                `Need help? Reply *HI* and choose Support.`,
+        });
+        return;
+    }
+
+    // 4. Mark payment as completed (only reached if Flutterwave confirmed it)
     await db.query(
         `UPDATE payments SET status = 'completed', paid_at = CURRENT_TIMESTAMP WHERE id = $1`,
         [payment.id]
