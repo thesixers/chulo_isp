@@ -100,7 +100,8 @@ app.post("/webhook/flutterwave", async (req, res) => {
       event["event.type"] === "BANK_TRANSFER_TRANSACTION" &&
       data.status === "successful"
     ) {
-      const txRef = data.tx_ref;
+      const txRef      = data.tx_ref;
+      const amountPaid = Number(data.amount || 0);
 
       if (!txRef) {
         req.log.error("Webhook: missing tx_ref in event.data");
@@ -125,7 +126,7 @@ app.post("/webhook/flutterwave", async (req, res) => {
             req.log.error("globalSock is null — WhatsApp not connected yet");
             return;
           }
-          await fulfillPayment(db, globalSock, user);
+          await fulfillPayment(db, globalSock, user, amountPaid);
         } else {
           req.log.warn(
             { txRef },
@@ -142,7 +143,8 @@ app.post("/webhook/flutterwave", async (req, res) => {
       event["event.type"] === "BANK_TRANSFER_TRANSACTION" &&
       event.status === "successful"
     ) {
-      const txRef = event.txRef;
+      const txRef      = event.txRef;
+      const amountPaid = Number(event.amount || 0);
 
       try {
         const paymentRes = await db.query(
@@ -162,7 +164,8 @@ app.post("/webhook/flutterwave", async (req, res) => {
             req.log.error("globalSock is null — WhatsApp not connected yet");
             return;
           }
-          await fulfillPayment(db, globalSock, user);
+          await fulfillPayment(db, globalSock, user, amountPaid);
+
         } else {
           req.log.warn(
             { txRef },

@@ -1,17 +1,18 @@
 import { provisionHotspotUser, buildMikrotikComment } from './mikrotik.js';
 import { enqueueProvisioning } from './provisioningQueue.js';
-import { verifyPayment } from './flutterwave.js';
+
 
 /**
  * Fulfills a confirmed payment:
  * - First-time users: sends confirmation, then asks them to choose a hotspot username/password
  * - Renewals: sends confirmation, then re-provisions on MikroTik using stored credentials
  *
- * @param {object} db   - pg Pool instance
- * @param {object} sock - Baileys socket instance
- * @param {object} user - Full user row from the `users` table
+ * @param {object} db          - pg Pool instance
+ * @param {object} sock        - Baileys socket instance
+ * @param {object} user        - Full user row from the `users` table
+ * @param {number} amountPaid  - Amount received, taken directly from the webhook payload
  */
-export async function fulfillPayment(db, sock, user) {
+export async function fulfillPayment(db, sock, user, amountPaid) {
     // Use the exact JID stored from the user's last message — avoids LID/phone mismatch
     const sessionRes = await db.query(
         `SELECT plan_id, remote_jid, gift_target_user_id FROM whatsapp_sessions WHERE phone = $1`,
@@ -64,17 +65,16 @@ export async function fulfillPayment(db, sock, user) {
         return;
     }
 
-    // 3. Verify with Flutterwave that payment was actually received
-    const paid = await verifyPayment(payment.virtual_account_reference, plan.price);
-    if (!paid) {
+    // 3. Validate that the amount from the webhook covers the plan price
+    //    amountPaid is passed directly from the verified Flutterwave webhook payload,
+    //    so we trust it completely — no extra API call needed.
+    if (Number(amountPaid) < Number(plan.price)) {
+        console.warn(`⚠️ fulfillPayment: underpayment — expected ₦${plan.price}, got ₦${amountPaid}`);
         await sock.sendMessage(remoteJid, {
             text:
-                `⏳ *Payment Not Yet Received*\n\n` +
-                `We checked with our payment provider and your transfer hasn't been confirmed yet.\n\n` +
-                `• Please wait a few minutes and try again\n` +
-                `• Make sure you transferred to the correct account number\n` +
-                `• Reply *PAID* once your bank confirms the transfer\n\n` +
-                `Need help? Reply *HI* and choose Support.`,
+                `⚠️ *Underpayment Detected*\n\n` +
+                `We received *₦${Number(amountPaid).toLocaleString()}* but your plan requires *₦${Number(plan.price).toLocaleString()}*.\n\n` +
+                `Please transfer the remaining *₦${(plan.price - amountPaid).toLocaleString()}* to the same account number and it will be applied automatically.`,
         });
         return;
     }

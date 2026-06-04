@@ -43,7 +43,7 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
                 narration: `Chulo Speednet - ${planName}`,
                 phonenumber: phone,
                 firstname: 'Chulo',
-                lastname: 'User',
+                lastname: 'Speednet',
                 frequency: 1,   // single-use: expires after one successful payment
             });
 
@@ -51,7 +51,8 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
             return {
                 txRef,
                 accountNumber: data.account_number,
-                bankName: data.bank_name,
+                accountName:   data.account_name,
+                bankName:      data.bank_name,
             };
         } catch (error) {
             const status = error.response?.status;

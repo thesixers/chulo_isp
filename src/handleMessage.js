@@ -1,5 +1,6 @@
 import { createDynamicVirtualAccount } from "./flutterwave.js";
-import { fulfillPayment, provisionOrQueue } from "./fulfillPayment.js";
+import { provisionOrQueue } from "./fulfillPayment.js";
+
 import { provisionHotspotUser, buildMikrotikComment } from "./mikrotik.js";
 import { handleAdminMessage } from "./adminHandler.js";
 
@@ -693,7 +694,7 @@ export async function handleMessage(
       });
 
       try {
-        const { txRef, accountNumber, bankName } =
+        const { txRef, accountNumber, accountName, bankName } =
           await createDynamicVirtualAccount(
             phone,
             selectedPlan.price,
@@ -736,6 +737,7 @@ export async function handleMessage(
             `📡 Plan: *${selectedPlan.name}*\n` +
             `💰 Amount: *₦${Number(selectedPlan.price).toLocaleString()}*\n\n` +
             `🏦 Bank: *${bankName}*\n` +
+            `👤 Account Name: *${accountName}*\n` +
             `💳 Account Number: *${accountNumber}*\n\n` +
             `⏱ This account expires in *1 hour*.\n` +
             `${noticeText}\n\n` +
@@ -759,24 +761,18 @@ export async function handleMessage(
         break;
       }
 
-      // Any message (PAID, payed, done, i paid, etc.) → attempt verification
+      // Any message while waiting for payment → reassure the user.
+      // We do NOT check Flutterwave manually here anymore — the webhook fires
+      // automatically the moment the transfer clears, and it handles everything.
       await sock.sendMessage(from, {
-        text: `⏳ Please wait while we verify your payment...`,
+        text:
+          `⏳ *We're waiting for your bank to confirm the transfer.*\n\n` +
+          `As soon as it clears, your plan will be activated automatically and you'll get a confirmation message.\n\n` +
+          `You don't need to do anything else — just sit tight! 🙏`,
       });
-      try {
-        const freshUser = await db.query(
-          "SELECT * FROM users WHERE phone = $1",
-          [phone],
-        );
-        await fulfillPayment(db, sock, freshUser.rows[0]);
-      } catch (err) {
-        console.error("Manual payment check error:", err);
-        await sock.sendMessage(from, {
-          text: `❌ Couldn't verify payment. Please contact support (reply *6*) or send *HI* to try again.`,
-        });
-      }
       break;
     }
+
 
 
     // ──────────────────────────────────────────────────────────────────
