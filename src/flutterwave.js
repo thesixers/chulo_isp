@@ -40,7 +40,7 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
                 tx_ref: txRef,
                 amount,
                 currency: 'NGN',
-                narration: `Chulo Speednet - ${planName}`,
+                narration: `Chulo Speednet ${planName}`,
                 phonenumber: phone,
                 firstname: 'Chulo',
                 lastname: 'Speednet',
@@ -51,7 +51,7 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
             return {
                 txRef,
                 accountNumber: data.account_number,
-                accountName:   `Chulo Speednet - ${planName}`,   // This is what shows in the recipient's banking app
+                accountName:   `Chulo Speednet ${planName}`,   // This is what shows in the recipient's banking app
                 bankName:      data.bank_name,
             };
         } catch (error) {
