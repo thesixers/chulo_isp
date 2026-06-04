@@ -55,7 +55,9 @@ export async function handleAdminMessage(sock, from, text, db) {
                 `🗑️ !delsub <username>\n` +
                 `   Delete a subscription for a user (active or queued)\n\n` +
                 `📢 !broadcast <message>\n` +
-                `   Send message to all active subscribers`,
+                `   Send message to all active subscribers\n\n` +
+                `➕ !addplan\n` +
+                `   Add a new data plan`,
         });
         return true;
     }
@@ -522,6 +524,22 @@ export async function handleAdminMessage(sock, from, text, db) {
         return true;
     }
 
+    // ── Add a new plan ────────────────────────────────────────────────────
+    if (cmd === '!addplan') {
+        adminSessions.set(from, { step: 'addplan_device' });
+        await sock.sendMessage(from, {
+            text:
+                `➕ *Add New Plan*\n\n` +
+                `*Select device limit:*\n` +
+                `1️⃣ Single Device\n` +
+                `2️⃣ Two Devices\n` +
+                `3️⃣ Three Devices\n\n` +
+                `Reply with *1*, *2*, or *3*, or type *!cancel*.`,
+        });
+        return true;
+    }
+
+
     if (cmd === '!cancel') {
         if (adminSessions.has(from)) {
             adminSessions.delete(from);
@@ -531,6 +549,7 @@ export async function handleAdminMessage(sock, from, text, db) {
         }
         return true;
     }
+
 
     // Not an admin command (starts with ! but unrecognised)
     if (cmd.startsWith('!')) {
@@ -785,6 +804,109 @@ async function handleAdminSession(sock, from, text, db, session) {
         } catch (err) {
             console.error('!delsub failed:', err.message);
             await sock.sendMessage(from, { text: `❌ Failed to delete subscription: ${err.message}` });
+        }
+        return true;
+    }
+
+    // ── !addplan steps ─────────────────────────────────────────────────
+
+    if (step === 'addplan_device') {
+        const profileMap = {
+            '1': { profile: '7/7_Mbps_1Users', label: 'Single Device' },
+            '2': { profile: '7/7_Mbps_2Users', label: 'Two Devices' },
+            '3': { profile: '7/7_Mbps_3Users', label: 'Three Devices' },
+        };
+        const choice = profileMap[text];
+        if (!choice) {
+            await sock.sendMessage(from, { text: `Please reply with *1*, *2*, or *3*. (Or type !cancel)` });
+            return true;
+        }
+        adminSessions.set(from, { step: 'addplan_price', ...choice });
+        await sock.sendMessage(from, {
+            text: `💰 *Enter the plan price in ₦* (numbers only):\nExample: \`3500\``,
+        });
+        return true;
+    }
+
+    if (step === 'addplan_price') {
+        const price = parseInt(text.replace(/[^\d]/g, ''), 10);
+        if (isNaN(price) || price <= 0) {
+            await sock.sendMessage(from, { text: `Please enter a valid price (numbers only). (Or type !cancel)` });
+            return true;
+        }
+        adminSessions.set(from, { ...session, step: 'addplan_duration', price });
+        await sock.sendMessage(from, {
+            text: `📅 *Enter the plan duration in days* (numbers only):\nExample: \`30\` for 1 month, \`7\` for 1 week`,
+        });
+        return true;
+    }
+
+    if (step === 'addplan_duration') {
+        const days = parseInt(text.replace(/[^\d]/g, ''), 10);
+        if (isNaN(days) || days <= 0) {
+            await sock.sendMessage(from, { text: `Please enter a valid number of days. (Or type !cancel)` });
+            return true;
+        }
+
+        // Auto-generate human-friendly duration label
+        function durationLabel(d) {
+            if (d === 1)  return '1 Day';
+            if (d < 7)   return `${d} Days`;
+            if (d === 7)  return '1 Week';
+            if (d === 14) return '2 Weeks';
+            if (d === 21) return '3 Weeks';
+            if (d === 30) return '1 Month';
+            if (d === 60) return '2 Months';
+            if (d === 90) return '3 Months';
+            if (d % 30 === 0) return `${d / 30} Months`;
+            if (d % 7 === 0)  return `${d / 7} Weeks`;
+            return `${d} Days`;
+        }
+
+        const planName = `${durationLabel(days)} - ${session.label}`;
+        adminSessions.set(from, { ...session, step: 'addplan_confirm', days, planName });
+
+        await sock.sendMessage(from, {
+            text:
+                `ℹ️ *Confirm New Plan*\n\n` +
+                `📝 Name: *${planName}*\n` +
+                `💰 Price: *₦${Number(session.price).toLocaleString()}*\n` +
+                `📅 Duration: *${days} days*\n` +
+                `📱 Devices: *${session.label}*\n` +
+                `⚙️ Profile: \`${session.profile}\`\n\n` +
+                `Reply *YES* to save or *NO* to cancel.`,
+        });
+        return true;
+    }
+
+    if (step === 'addplan_confirm') {
+        if (text.toLowerCase() !== 'yes') {
+            adminSessions.delete(from);
+            await sock.sendMessage(from, { text: `❌ Plan creation cancelled.` });
+            return true;
+        }
+
+        adminSessions.delete(from);
+
+        try {
+            const res = await db.query(
+                `INSERT INTO plans (name, price, duration_days, mikrotik_profile)
+                 VALUES ($1, $2, $3, $4)
+                 RETURNING id`,
+                [session.planName, session.price, session.days, session.profile]
+            );
+            const newId = res.rows[0].id;
+            await sock.sendMessage(from, {
+                text:
+                    `✅ *Plan Created Successfully!*\n\n` +
+                    `📝 *${session.planName}*\n` +
+                    `💰 ₦${Number(session.price).toLocaleString()} · ${session.days} days · ${session.label}\n` +
+                    `🔑 Plan ID: ${newId}\n\n` +
+                    `Users can now purchase this plan immediately.`,
+            });
+        } catch (err) {
+            console.error('!addplan failed:', err.message);
+            await sock.sendMessage(from, { text: `❌ Failed to save plan: ${err.message}` });
         }
         return true;
     }
