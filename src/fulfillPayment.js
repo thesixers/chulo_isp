@@ -24,10 +24,12 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
 
     // If this is a gift purchase, fetch User B's record. Otherwise use User A (the payer).
     let targetUser = user;
+
     if (giftTargetUserId) {
         const targetRes = await db.query(`SELECT * FROM users WHERE id = $1`, [giftTargetUserId]);
         if (targetRes.rows.length) targetUser = targetRes.rows[0];
     }
+    
     const isGift = giftTargetUserId && targetUser.id !== user.id;
 
     console.log(`💬 fulfillPayment: remoteJid=${remoteJid}`);
@@ -51,16 +53,18 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
     const planId = session?.plan_id;
     if (!planId) {
         await sock.sendMessage(remoteJid, {
-            text: `⚠️ We couldn't find your selected plan. Please send *HI* to start over.`,
+            text: `⚠️ We couldn't find your selected plan. Please send *HI* to start over or contact chulo speednet support to rectify any payment issue.`,
         });
         return;
     }
 
     const planRes = await db.query(`SELECT * FROM plans WHERE id = $1`, [planId]);
-    const plan    = planRes.rows[0];
+
+    const plan = planRes.rows[0];
+
     if (!plan) {
         await sock.sendMessage(remoteJid, {
-            text: `⚠️ Your selected plan no longer exists. Please send *HI* to choose a new one.`,
+            text: `⚠️ Your selected plan no longer exists. Please send *HI* to choose a new one or contact chulo speednet support to rectify any payment issue.`,
         });
         return;
     }
@@ -122,6 +126,7 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
             && activeDays < 28 && newDays < 28) return 1;  // weekly  → weekly
         return 0;
     }
+    
     const bonusDays = renewingEarly
         ? sameTierBonus(activeSub.active_duration_days, plan.duration_days)
         : 0;
@@ -239,7 +244,7 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
  */
 function promoTip(durationDays) {
     if (durationDays >= 28) return '\n\n🎁 *Tip: Renew before your plan expires and get 3 FREE days added!*';
-    if (durationDays >=  3) return '\n\n🎁 *Tip: Renew before your plan expires and get 1 FREE day added!*';
+    if (durationDays >=  7) return '\n\n🎁 *Tip: Renew before your plan expires and get 1 FREE day added!*';
     return '';
 }
 

@@ -32,13 +32,13 @@ async function upsertUser(db, phone, pushName = null) {
   if (res.rows.length === 0) {
     res = await db.query(
       `INSERT INTO users (phone, name) VALUES ($1, $2) RETURNING *`,
-      [phone, pushName],
+      [phone, pushName]
     );
   } else {
     // Update name if we now have it and didn't before
     res = await db.query(
       `UPDATE users SET updated_at = CURRENT_TIMESTAMP, name = COALESCE($2, name) WHERE phone = $1 RETURNING *`,
-      [phone, pushName],
+      [phone, pushName]
     );
   }
   return res.rows[0];
@@ -47,11 +47,18 @@ async function upsertUser(db, phone, pushName = null) {
 async function getSession(db, phone) {
   const res = await db.query(
     "SELECT state, plan_id, remote_jid, gift_target_user_id, pending_username, pending_password FROM whatsapp_sessions WHERE phone = $1",
-    [phone],
+    [phone]
   );
   return res.rows.length > 0
     ? res.rows[0]
-    : { state: "start", plan_id: null, remote_jid: null, gift_target_user_id: null, pending_username: null, pending_password: null };
+    : {
+        state: "start",
+        plan_id: null,
+        remote_jid: null,
+        gift_target_user_id: null,
+        pending_username: null,
+        pending_password: null,
+      };
 }
 
 async function updateSession(
@@ -62,7 +69,7 @@ async function updateSession(
   remoteJid = null,
   giftTargetUserId = null,
   pendingUsername = undefined,
-  pendingPassword = undefined,
+  pendingPassword = undefined
 ) {
   await db.query(
     `
@@ -77,21 +84,29 @@ async function updateSession(
             pending_password    = COALESCE(EXCLUDED.pending_password, whatsapp_sessions.pending_password),
             last_updated        = CURRENT_TIMESTAMP
     `,
-    [phone, state, planId, remoteJid, giftTargetUserId, pendingUsername ?? null, pendingPassword ?? null],
+    [
+      phone,
+      state,
+      planId,
+      remoteJid,
+      giftTargetUserId,
+      pendingUsername ?? null,
+      pendingPassword ?? null,
+    ]
   );
 }
 
 async function getPlan(db, id) {
   const res = await db.query(
     "SELECT id, name, price, duration_days, mikrotik_profile FROM plans WHERE id = $1",
-    [id],
+    [id]
   );
   return res.rows.length > 0 ? res.rows[0] : null;
 }
 
 async function getAllPlans(db) {
   const res = await db.query(
-    "SELECT id, name, price, duration_days, mikrotik_profile FROM plans ORDER BY mikrotik_profile, duration_days DESC",
+    "SELECT id, name, price, duration_days, mikrotik_profile FROM plans ORDER BY mikrotik_profile, duration_days DESC"
   );
   return res.rows;
 }
@@ -105,7 +120,7 @@ async function getActiveSubscription(db, userId) {
         WHERE s.user_id = $1 AND s.status = 'active' AND s.expiry_time > CURRENT_TIMESTAMP
         ORDER BY s.expiry_time DESC LIMIT 1
     `,
-    [userId],
+    [userId]
   );
   return res.rows.length > 0 ? res.rows[0] : null;
 }
@@ -119,7 +134,7 @@ async function getSubscriptionHistory(db, userId) {
         WHERE s.user_id = $1
         ORDER BY s.start_time DESC LIMIT 6
     `,
-    [userId],
+    [userId]
   );
   return res.rows;
 }
@@ -136,7 +151,7 @@ async function getPaymentHistory(db, userId) {
         WHERE p.user_id = $1
         ORDER BY p.created_at DESC LIMIT 6
     `,
-    [userId],
+    [userId]
   );
   return res.rows;
 }
@@ -216,7 +231,9 @@ function buildFilteredPlanMenu(plans, label) {
   text += plans
     .map(
       (p, i) =>
-        `${EMOJI_NUMS[i]}  ${spellPlanName(p.name)} — ₦${Number(p.price).toLocaleString()}`,
+        `${EMOJI_NUMS[i]}  ${spellPlanName(p.name)} — ₦${Number(
+          p.price
+        ).toLocaleString()}`
     )
     .join("\n");
   text += `\n\nReply with the plan number (1–${plans.length}), or *0* to go back.`;
@@ -241,7 +258,7 @@ export async function handleMessage(
   pnJid,
   text,
   pushName = null,
-  db,
+  db
 ) {
   if (!text) return;
 
@@ -280,19 +297,46 @@ export async function handleMessage(
   if (msgLower === "0") {
     if (session.state === "awaiting_plan_selection") {
       // Plan list → device selection (preserve gift target)
-      await updateSession(db, phone, "awaiting_device_selection", null, from, session.gift_target_user_id);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_device_selection",
+        null,
+        from,
+        session.gift_target_user_id
+      );
       await sock.sendMessage(from, { text: buildDeviceMenu() });
-    } else if (session.state === "awaiting_device_selection" && session.gift_target_user_id) {
+    } else if (
+      session.state === "awaiting_device_selection" &&
+      session.gift_target_user_id
+    ) {
       // Device selection (gift mode) → enter username screen
-      await updateSession(db, phone, "awaiting_gift_username", null, from, null);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_gift_username",
+        null,
+        from,
+        null
+      );
       await sock.sendMessage(from, {
         text:
           `👤 *Enter the hotspot username* of the person you're buying for:\n\n` +
           `Reply *0* to go back.`,
       });
-    } else if (session.state === "awaiting_device_selection" && !session.gift_target_user_id) {
+    } else if (
+      session.state === "awaiting_device_selection" &&
+      !session.gift_target_user_id
+    ) {
       // Device selection (self mode) → "Myself or Someone else?"
-      await updateSession(db, phone, "awaiting_purchase_target", null, from, null);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_purchase_target",
+        null,
+        from,
+        null
+      );
       await sock.sendMessage(from, {
         text:
           `📡 *Who are you buying for?*\n\n` +
@@ -302,7 +346,14 @@ export async function handleMessage(
       });
     } else if (session.state === "awaiting_gift_username") {
       // Enter username → "Myself or Someone else?"
-      await updateSession(db, phone, "awaiting_purchase_target", null, from, null);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_purchase_target",
+        null,
+        from,
+        null
+      );
       await sock.sendMessage(from, {
         text:
           `📡 *Who are you buying for?*\n\n` +
@@ -312,7 +363,14 @@ export async function handleMessage(
       });
     } else {
       // Everywhere else (including awaiting_purchase_target) → main menu
-      await updateSession(db, phone, "awaiting_service_selection", null, from, null);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_service_selection",
+        null,
+        from,
+        null
+      );
       await sock.sendMessage(from, { text: buildWelcomeMessage(firstName) });
     }
     return;
@@ -327,7 +385,14 @@ export async function handleMessage(
         // ── 1. Buy a Data Plan ──────────────────────────────────
         case "1": {
           // Clear any previous gift target before starting a new purchase flow
-          await updateSession(db, phone, "awaiting_purchase_target", null, from, null);
+          await updateSession(
+            db,
+            phone,
+            "awaiting_purchase_target",
+            null,
+            from,
+            null
+          );
           await sock.sendMessage(from, {
             text:
               `📡 *Who are you buying for?*\n\n` +
@@ -395,7 +460,7 @@ export async function handleMessage(
              JOIN plans p ON p.id = s.plan_id
              WHERE s.user_id = $1 AND s.status = 'queued'
              ORDER BY s.start_time ASC`,
-            [user.id],
+            [user.id]
           );
           const queuedPlans = queuedRes.rows;
 
@@ -412,10 +477,10 @@ export async function handleMessage(
             if (sub) {
               const expiry = new Date(sub.expiry_time);
               const daysLeft = Math.ceil(
-                (expiry - new Date()) / (1000 * 60 * 60 * 24),
+                (expiry - new Date()) / (1000 * 60 * 60 * 24)
               );
               const hoursLeft = Math.ceil(
-                (expiry - new Date()) / (1000 * 60 * 60),
+                (expiry - new Date()) / (1000 * 60 * 60)
               );
               const timeLeft =
                 daysLeft > 1
@@ -437,7 +502,9 @@ export async function handleMessage(
               for (const q of queuedPlans) {
                 text +=
                   `\n⏳ ${q.plan_name}\n` +
-                  `🕐 Starts ${fmt(q.start_time)} · Expires ${fmt(q.expiry_time)}`;
+                  `🕐 Starts ${fmt(q.start_time)} · Expires ${fmt(
+                    q.expiry_time
+                  )}`;
               }
             }
 
@@ -448,7 +515,6 @@ export async function handleMessage(
           await updateSession(db, phone, "start");
           break;
         }
-
 
         // ── 5. Subscription History ─────────────────────────────
         case "5": {
@@ -491,7 +557,7 @@ export async function handleMessage(
                         WHERE user_id = $1
                         ORDER BY created_at DESC LIMIT 6
                     `,
-            [user.id],
+            [user.id]
           );
 
           if (!payments.rows.length) {
@@ -508,12 +574,13 @@ export async function handleMessage(
                   p.status === "completed"
                     ? "✅"
                     : p.status === "pending"
-                      ? "⏳"
-                      : "❌";
+                    ? "⏳"
+                    : "❌";
                 const date = p.paid_at || p.created_at;
                 return (
-                  `${i + 1}. ${statusEmoji} *₦${Number(p.amount).toLocaleString()}*\n` +
-                  `   📅 ${fmt(date)} — ${p.status}`
+                  `${i + 1}. ${statusEmoji} *₦${Number(
+                    p.amount
+                  ).toLocaleString()}*\n` + `   📅 ${fmt(date)} — ${p.status}`
                 );
               })
               .join("\n\n");
@@ -559,11 +626,25 @@ export async function handleMessage(
     case "awaiting_purchase_target": {
       if (message === "1") {
         // Buying for self — clear any gift target and proceed normally
-        await updateSession(db, phone, "awaiting_device_selection", null, from, null);
+        await updateSession(
+          db,
+          phone,
+          "awaiting_device_selection",
+          null,
+          from,
+          null
+        );
         await sock.sendMessage(from, { text: buildDeviceMenu() });
       } else if (message === "2") {
         // Buying for someone else — ask for their username
-        await updateSession(db, phone, "awaiting_gift_username", null, from, null);
+        await updateSession(
+          db,
+          phone,
+          "awaiting_gift_username",
+          null,
+          from,
+          null
+        );
         await sock.sendMessage(from, {
           text:
             `👤 *Enter the hotspot username* of the person you're buying for:\n\n` +
@@ -586,7 +667,7 @@ export async function handleMessage(
       // Look up User B by their hotspot username (case-insensitive)
       const targetRes = await db.query(
         `SELECT * FROM users WHERE LOWER(hotspot_username) = LOWER($1)`,
-        [targetUsername],
+        [targetUsername]
       );
 
       if (!targetRes.rows.length) {
@@ -601,7 +682,14 @@ export async function handleMessage(
       const targetUser = targetRes.rows[0];
 
       // Confirm and proceed to device selection, storing the target user's ID
-      await updateSession(db, phone, "awaiting_device_selection", null, from, targetUser.id);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_device_selection",
+        null,
+        from,
+        targetUser.id
+      );
       await sock.sendMessage(from, {
         text:
           `✅ Buying for *${targetUser.hotspot_username}*!\n\n` +
@@ -614,7 +702,6 @@ export async function handleMessage(
     // BUY PLAN — Step 0: pick number of devices
     // ──────────────────────────────────────────────────────────────────
     case "awaiting_device_selection": {
-
       const profileMap = {
         1: { profile: "7/7_Mbps_1Users", label: "Single Device" },
         2: { profile: "7/7_Mbps_2Users", label: "Two Devices" },
@@ -624,11 +711,21 @@ export async function handleMessage(
       if (choice) {
         const res = await db.query(
           `SELECT * FROM plans WHERE mikrotik_profile = $1 ORDER BY duration_days DESC`,
-          [choice.profile],
+          [choice.profile]
         );
+
         // Store baseId in plan_id so positional selection works, and preserve gift target
         const baseId = res.rows[0]?.id;
-        await updateSession(db, phone, "awaiting_plan_selection", baseId, from, session.gift_target_user_id);
+
+        await updateSession(
+          db,
+          phone,
+          "awaiting_plan_selection",
+          baseId,
+          from,
+          session.gift_target_user_id
+        );
+
         await sock.sendMessage(from, {
           text: buildFilteredPlanMenu(res.rows, choice.label),
         });
@@ -650,6 +747,11 @@ export async function handleMessage(
           `Our support team will get back to you shortly.\n\n` +
           `Reply *HI* to return to the main menu.`,
       });
+
+      // Promise.all(ADMIN_PHONES.forEach(admin_phone => {
+      //   sock.sendMessage()
+      // }))
+
       await updateSession(db, phone, "start");
       break;
     }
@@ -658,7 +760,9 @@ export async function handleMessage(
     // BUY PLAN — Step 1: pick a plan
     // ──────────────────────────────────────────────────────────────────
     case "awaiting_plan_selection": {
+
       const position = parseInt(message, 10);
+
       if (isNaN(position) || position < 1 || position > 9) {
         await sock.sendMessage(from, {
           text: `Please reply with a plan number (1–5), or *0* to go back.`,
@@ -683,8 +787,13 @@ export async function handleMessage(
       const willBeQueued = !!activeSub;
 
       const isGift = !!session.gift_target_user_id;
+      
       const giftTarget = isGift
-        ? (await db.query(`SELECT hotspot_username FROM users WHERE id = $1`, [session.gift_target_user_id])).rows[0]
+        ? (
+            await db.query(`SELECT hotspot_username FROM users WHERE id = $1`, [
+              session.gift_target_user_id,
+            ])
+          ).rows[0]
         : null;
 
       await sock.sendMessage(from, {
@@ -698,7 +807,7 @@ export async function handleMessage(
           await createDynamicVirtualAccount(
             phone,
             selectedPlan.price,
-            selectedPlan.name,
+            selectedPlan.name
           );
 
         await db.query(
@@ -706,7 +815,7 @@ export async function handleMessage(
                     INSERT INTO payments (user_id, amount, provider, status, virtual_account_reference)
                     VALUES ($1, $2, 'flutterwave', 'pending', $3)
                 `,
-          [user.id, selectedPlan.price, txRef],
+          [user.id, selectedPlan.price, txRef]
         );
 
         // Preserve gift_target_user_id through awaiting_payment state
@@ -716,7 +825,7 @@ export async function handleMessage(
           "awaiting_payment",
           selectedPlan.id,
           from,
-          session.gift_target_user_id,
+          session.gift_target_user_id
         );
 
         let noticeText = isGift
@@ -733,7 +842,9 @@ export async function handleMessage(
         await sock.sendMessage(from, {
           text:
             `✅ *Payment Details*\n\n` +
-            (isGift ? `🎁 Gifting to: *${giftTarget?.hotspot_username}*\n` : "") +
+            (isGift
+              ? `🎁 Gifting to: *${giftTarget?.hotspot_username}*\n`
+              : "") +
             `📡 Plan: *${selectedPlan.name}*\n` +
             `💰 Amount: *₦${Number(selectedPlan.price).toLocaleString()}*\n\n` +
             `🏦 Bank: *${bankName}*\n` +
@@ -773,8 +884,6 @@ export async function handleMessage(
       break;
     }
 
-
-
     // ──────────────────────────────────────────────────────────────────
     // MANAGE ACCOUNT sub-menu
     // ──────────────────────────────────────────────────────────────────
@@ -786,7 +895,7 @@ export async function handleMessage(
           phone,
           "awaiting_service_selection",
           null,
-          from,
+          from
         );
         await sock.sendMessage(from, { text: buildWelcomeMessage(firstName) });
         break;
@@ -845,7 +954,7 @@ export async function handleMessage(
       // Check if username is already taken (case-insensitively)
       const checkRes = await db.query(
         `SELECT id FROM users WHERE LOWER(hotspot_username) = LOWER($1) AND id != $2`,
-        [raw, user.id],
+        [raw, user.id]
       );
       if (checkRes.rowCount > 0) {
         await sock.sendMessage(from, {
@@ -855,7 +964,15 @@ export async function handleMessage(
       }
 
       // Stage username and ask for confirmation before saving
-      await updateSession(db, phone, "awaiting_hotspot_username_confirm", session.plan_id, from, null, raw);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_hotspot_username_confirm",
+        session.plan_id,
+        from,
+        null,
+        raw
+      );
       await sock.sendMessage(from, {
         text:
           `👤 Are you sure you want *${raw}* as your username?\n\n` +
@@ -876,7 +993,16 @@ export async function handleMessage(
       }
 
       // Stage PIN and ask for confirmation
-      await updateSession(db, phone, "awaiting_hotspot_password_confirm", session.plan_id, from, null, undefined, message);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_hotspot_password_confirm",
+        session.plan_id,
+        from,
+        null,
+        undefined,
+        message
+      );
       await sock.sendMessage(from, {
         text:
           `🔑 Are you sure you want *${message}* as your PIN?\n\n` +
@@ -893,13 +1019,30 @@ export async function handleMessage(
       if (msgLower === "yes") {
         const pendingUser = session.pending_username;
         if (!pendingUser) {
-          await updateSession(db, phone, "awaiting_hotspot_username", session.plan_id, from);
-          await sock.sendMessage(from, { text: `Something went wrong. Please enter your username again:` });
+          await updateSession(
+            db,
+            phone,
+            "awaiting_hotspot_username",
+            session.plan_id,
+            from
+          );
+          await sock.sendMessage(from, {
+            text: `Something went wrong. Please enter your username again:`,
+          });
           break;
         }
         // Save confirmed username and proceed to password
-        await db.query(`UPDATE users SET hotspot_username = $1 WHERE id = $2`, [pendingUser, user.id]);
-        await updateSession(db, phone, "awaiting_hotspot_password", session.plan_id, from);
+        await db.query(`UPDATE users SET hotspot_username = $1 WHERE id = $2`, [
+          pendingUser,
+          user.id,
+        ]);
+        await updateSession(
+          db,
+          phone,
+          "awaiting_hotspot_password",
+          session.plan_id,
+          from
+        );
         await sock.sendMessage(from, {
           text:
             `✅ Username *${pendingUser}* confirmed!\n\n` +
@@ -907,7 +1050,13 @@ export async function handleMessage(
             `Example: \`1234\`\n\nReply with your PIN:`,
         });
       } else if (msgLower === "no") {
-        await updateSession(db, phone, "awaiting_hotspot_username", session.plan_id, from);
+        await updateSession(
+          db,
+          phone,
+          "awaiting_hotspot_username",
+          session.plan_id,
+          from
+        );
         await sock.sendMessage(from, {
           text:
             `No problem! Choose a different username\n\n` +
@@ -915,7 +1064,9 @@ export async function handleMessage(
             `Example: \`john\` or \`john_2\` or \`john20\`, etc.`,
         });
       } else {
-        await sock.sendMessage(from, { text: `Please reply *YES* to confirm or *NO* to choose again.` });
+        await sock.sendMessage(from, {
+          text: `Please reply *YES* to confirm or *NO* to choose again.`,
+        });
       }
       break;
     }
@@ -928,28 +1079,61 @@ export async function handleMessage(
         const pass = session.pending_password;
         const username = user.hotspot_username;
         if (!pass) {
-          await updateSession(db, phone, "awaiting_hotspot_password", session.plan_id, from);
-          await sock.sendMessage(from, { text: `Something went wrong. Please enter your PIN again:` });
+          await updateSession(
+            db,
+            phone,
+            "awaiting_hotspot_password",
+            session.plan_id,
+            from
+          );
+          await sock.sendMessage(from, {
+            text: `Something went wrong. Please enter your PIN again:`,
+          });
           break;
         }
-        await db.query(`UPDATE users SET hotspot_password = $1 WHERE id = $2`, [pass, user.id]);
-        const planRes = await db.query(`SELECT * FROM plans WHERE id = $1`, [session.plan_id]);
+        await db.query(`UPDATE users SET hotspot_password = $1 WHERE id = $2`, [
+          pass,
+          user.id,
+        ]);
+        const planRes = await db.query(`SELECT * FROM plans WHERE id = $1`, [
+          session.plan_id,
+        ]);
         const plan = planRes.rows[0];
         await updateSession(db, phone, "start", null, from);
-        await sock.sendMessage(from, { text: `⏳ Setting up your account as *${username}*...` });
+        await sock.sendMessage(from, {
+          text: `⏳ Setting up your account as *${username}*...`,
+        });
         const subRes = await db.query(
           `SELECT expiry_time FROM subscriptions WHERE user_id = $1 AND status = 'active' ORDER BY id DESC LIMIT 1`,
-          [user.id],
+          [user.id]
         );
         const expiryTime = subRes.rows[0]?.expiry_time || null;
-        await provisionOrQueue(db, sock, user, plan, from, username, pass, false, expiryTime);
+        await provisionOrQueue(
+          db,
+          sock,
+          user,
+          plan,
+          from,
+          username,
+          pass,
+          false,
+          expiryTime
+        );
       } else if (msgLower === "no") {
-        await updateSession(db, phone, "awaiting_hotspot_password", session.plan_id, from);
+        await updateSession(
+          db,
+          phone,
+          "awaiting_hotspot_password",
+          session.plan_id,
+          from
+        );
         await sock.sendMessage(from, {
           text: `No problem! Choose a different *4-digit PIN* (numbers only):\nReply with your new PIN:`,
         });
       } else {
-        await sock.sendMessage(from, { text: `Please reply *YES* to confirm or *NO* to choose a different PIN.` });
+        await sock.sendMessage(from, {
+          text: `Please reply *YES* to confirm or *NO* to choose a different PIN.`,
+        });
       }
       break;
     }
@@ -985,7 +1169,7 @@ export async function handleMessage(
       // Check if username is already taken (case-insensitively)
       const checkRes = await db.query(
         `SELECT id FROM users WHERE LOWER(hotspot_username) = LOWER($1) AND id != $2`,
-        [raw, user.id],
+        [raw, user.id]
       );
       if (checkRes.rowCount > 0) {
         await sock.sendMessage(from, {
@@ -1003,7 +1187,15 @@ export async function handleMessage(
         break;
       }
       // Stage username and confirm before applying
-      await updateSession(db, phone, "awaiting_new_username_confirm", null, from, null, raw);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_new_username_confirm",
+        null,
+        from,
+        null,
+        raw
+      );
       await sock.sendMessage(from, {
         text:
           `👤 Are you sure you want to change your username to *${raw}*?\n\n` +
@@ -1019,11 +1211,15 @@ export async function handleMessage(
     case "awaiting_new_username_confirm": {
       if (msgLower === "0") {
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, { text: `Cancelled. Reply *HI* for the main menu.` });
+        await sock.sendMessage(from, {
+          text: `Cancelled. Reply *HI* for the main menu.`,
+        });
         break;
       }
       if (msgLower !== "yes" && msgLower !== "no") {
-        await sock.sendMessage(from, { text: `Please reply *YES* to confirm, *NO* to choose again, or *0* to cancel.` });
+        await sock.sendMessage(from, {
+          text: `Please reply *YES* to confirm, *NO* to choose again, or *0* to cancel.`,
+        });
         break;
       }
       if (msgLower === "no") {
@@ -1041,18 +1237,25 @@ export async function handleMessage(
       const raw = session.pending_username;
       if (!raw) {
         await updateSession(db, phone, "awaiting_new_username", null, from);
-        await sock.sendMessage(from, { text: `Something went wrong. Please enter your username again:` });
+        await sock.sendMessage(from, {
+          text: `Something went wrong. Please enter your username again:`,
+        });
         break;
       }
       const sub = await getActiveSubscription(db, user.id);
       if (!sub) {
-        await sock.sendMessage(from, { text: `❌ Your subscription has expired or is inactive. Please buy a new plan to change your username.` });
+        await sock.sendMessage(from, {
+          text: `❌ Your subscription has expired or is inactive. Please buy a new plan to change your username.`,
+        });
         await updateSession(db, phone, "start");
         break;
       }
       // If no password yet, save username and move to password setup
       if (!user.hotspot_password) {
-        await db.query(`UPDATE users SET hotspot_username = $1 WHERE id = $2`, [raw, user.id]);
+        await db.query(`UPDATE users SET hotspot_username = $1 WHERE id = $2`, [
+          raw,
+          user.id,
+        ]);
         await updateSession(db, phone, "awaiting_new_password", null, from);
         await sock.sendMessage(from, {
           text:
@@ -1063,10 +1266,21 @@ export async function handleMessage(
         break;
       }
       const oldUser = user.hotspot_username || phone;
-      await sock.sendMessage(from, { text: `⏳ Updating your username to *${raw}*...` });
+      await sock.sendMessage(from, {
+        text: `⏳ Updating your username to *${raw}*...`,
+      });
       try {
-        const comment = buildMikrotikComment(user.phone, sub.duration_days, sub.expiry_time);
-        await provisionHotspotUser(raw, sub.mikrotik_profile, user.hotspot_password, comment);
+        const comment = buildMikrotikComment(
+          user.phone,
+          sub.duration_days,
+          sub.expiry_time
+        );
+        await provisionHotspotUser(
+          raw,
+          sub.mikrotik_profile,
+          user.hotspot_password,
+          comment
+        );
         const { RouterOSAPI } = await import("node-routeros");
         const apiConn = new RouterOSAPI({
           host: process.env.MIKROTIK_TUNNEL_IP,
@@ -1076,9 +1290,18 @@ export async function handleMessage(
           timeout: 10,
         });
         await apiConn.connect();
-        try { await apiConn.write("/ip/hotspot/user/remove", [`=numbers=${oldUser}`]); } catch (_) { /* ignore */ }
+        try {
+          await apiConn.write("/ip/hotspot/user/remove", [
+            `=numbers=${oldUser}`,
+          ]);
+        } catch (_) {
+          /* ignore */
+        }
         apiConn.close();
-        await db.query(`UPDATE users SET hotspot_username = $1 WHERE id = $2`, [raw, user.id]);
+        await db.query(`UPDATE users SET hotspot_username = $1 WHERE id = $2`, [
+          raw,
+          user.id,
+        ]);
         await updateSession(db, phone, "start");
         await sock.sendMessage(from, {
           text:
@@ -1092,7 +1315,9 @@ export async function handleMessage(
       } catch (err) {
         console.error("Username change failed:", err.message);
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, { text: `❌ Couldn't update your username right now. Please try again later or contact support (reply *6*).` });
+        await sock.sendMessage(from, {
+          text: `❌ Couldn't update your username right now. Please try again later or contact support (reply *6*).`,
+        });
       }
       break;
     }
@@ -1117,7 +1342,16 @@ export async function handleMessage(
       }
 
       // Stage PIN and confirm
-      await updateSession(db, phone, "awaiting_new_password_confirm", null, from, null, undefined, message);
+      await updateSession(
+        db,
+        phone,
+        "awaiting_new_password_confirm",
+        null,
+        from,
+        null,
+        undefined,
+        message
+      );
       await sock.sendMessage(from, {
         text:
           `🔑 Are you sure you want to change your PIN to *${message}*?\n\n` +
@@ -1133,11 +1367,15 @@ export async function handleMessage(
     case "awaiting_new_password_confirm": {
       if (msgLower === "0") {
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, { text: `Cancelled. Reply *HI* for the main menu.` });
+        await sock.sendMessage(from, {
+          text: `Cancelled. Reply *HI* for the main menu.`,
+        });
         break;
       }
       if (msgLower !== "yes" && msgLower !== "no") {
-        await sock.sendMessage(from, { text: `Please reply *YES* to confirm, *NO* to choose again, or *0* to cancel.` });
+        await sock.sendMessage(from, {
+          text: `Please reply *YES* to confirm, *NO* to choose again, or *0* to cancel.`,
+        });
         break;
       }
       if (msgLower === "no") {
@@ -1152,21 +1390,37 @@ export async function handleMessage(
       const newPass = session.pending_password;
       if (!newPass) {
         await updateSession(db, phone, "awaiting_new_password", null, from);
-        await sock.sendMessage(from, { text: `Something went wrong. Please enter your PIN again:` });
+        await sock.sendMessage(from, {
+          text: `Something went wrong. Please enter your PIN again:`,
+        });
         break;
       }
       const username = user.hotspot_username || phone;
       const sub = await getActiveSubscription(db, user.id);
       if (!sub) {
-        await sock.sendMessage(from, { text: `❌ Your subscription has expired or is inactive. Please buy a new plan to change your password.` });
+        await sock.sendMessage(from, {
+          text: `❌ Your subscription has expired or is inactive. Please buy a new plan to change your password.`,
+        });
         await updateSession(db, phone, "start");
         break;
       }
       await sock.sendMessage(from, { text: `⏳ Updating your password...` });
       try {
-        const comment = buildMikrotikComment(user.phone, sub.duration_days, sub.expiry_time);
-        await provisionHotspotUser(username, sub.mikrotik_profile, newPass, comment);
-        await db.query(`UPDATE users SET hotspot_password = $1 WHERE id = $2`, [newPass, user.id]);
+        const comment = buildMikrotikComment(
+          user.phone,
+          sub.duration_days,
+          sub.expiry_time
+        );
+        await provisionHotspotUser(
+          username,
+          sub.mikrotik_profile,
+          newPass,
+          comment
+        );
+        await db.query(`UPDATE users SET hotspot_password = $1 WHERE id = $2`, [
+          newPass,
+          user.id,
+        ]);
         await updateSession(db, phone, "start");
         await sock.sendMessage(from, {
           text:
@@ -1180,7 +1434,9 @@ export async function handleMessage(
       } catch (err) {
         console.error("Password change failed:", err.message);
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, { text: `❌ Couldn't update your password right now. Please try again later or contact support (reply *6*).` });
+        await sock.sendMessage(from, {
+          text: `❌ Couldn't update your password right now. Please try again later or contact support (reply *6*).`,
+        });
       }
       break;
     }

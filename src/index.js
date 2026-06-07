@@ -19,6 +19,8 @@ const app = vibe({
   logger: {
     lifecycle: true,
     prettyPrint: process.env.NODE_ENV !== "production",
+    dest: process.env.NODE_ENV === "test" ? "console" : "file",
+    logFile: "./chulo_logs.txt"
   },
 });
 
@@ -61,22 +63,6 @@ async function startBot() {
 
 app.get("/", () => "Welcome to Chulo Speednet");
 
-// Test endpoint — hit this to verify proactive WhatsApp sends work
-// Usage: curl http://localhost:3003/test-send
-// app.get("/test-send", async (req, res) => {
-//     if (!globalSock) return res.status(503).send("WhatsApp not connected");
-//     try {
-//         // Use the stored remote_jid from the last known session
-//         const result = await db.query(`SELECT remote_jid FROM whatsapp_sessions ORDER BY last_updated DESC LIMIT 1`);
-//         const jid = result.rows[0]?.remote_jid;
-//         if (!jid) return res.status(404).send("No session found in DB");
-//         await globalSock.sendMessage(jid, { text: "🔔 Test message from Chulo ISP server" });
-//         res.send(`✅ Message sent to ${jid}`);
-//     } catch (err) {
-//         res.status(500).send(`❌ Failed: ${err.message}`);
-//     }
-// })
-
 // Flutterwave Webhook
 app.post("/webhook/flutterwave", async (req, res) => {
   // 1. Verify signature — Flutterwave sends the secret hash you set in the dashboard
@@ -91,16 +77,16 @@ app.post("/webhook/flutterwave", async (req, res) => {
   res.status(200).send("OK");
 
   const event = req.body;
-  console.log("🔔 FLW Webhook received:", JSON.stringify(event, null, 2));
 
   if (process.env.NODE_ENV == "production") {
     // v3 bank transfer webhook: status and tx_ref are inside event.data
     const data = event.data || {};
+
     if (
       event["event.type"] === "BANK_TRANSFER_TRANSACTION" &&
       data.status === "successful"
     ) {
-      const txRef      = data.tx_ref;
+      const txRef = data.tx_ref;
       const amountPaid = Number(data.amount || 0);
 
       if (!txRef) {
@@ -143,7 +129,7 @@ app.post("/webhook/flutterwave", async (req, res) => {
       event["event.type"] === "BANK_TRANSFER_TRANSACTION" &&
       event.status === "successful"
     ) {
-      const txRef      = event.txRef;
+      const txRef = event.txRef;
       const amountPaid = Number(event.amount || 0);
 
       try {

@@ -15,14 +15,21 @@ export function buildMikrotikComment(phone, durationDays, expiry) {
     else if (durationDays >= 3)  code = '3D';
     else                         code = '1D';
 
-    const d     = new Date(expiry);
-    const day   = d.getDate();
-    const month = d.toLocaleString('en-GB', { month: 'short' });
-    const h24   = d.getHours();
-    const h12   = h24 % 12 || 12;
-    const ampm  = h24 >= 12 ? 'pm' : 'am';
+    const exp_d = new Date(expiry);
+    const exp_day = exp_d.getDate();
+    const exp_month = exp_d.toLocaleString('en-GB', { month: 'short' });
+    const exp_h24 = exp_d.getHours();
+    const exp_h12 = exp_h24 % 12 || 12;
+    const exp_ampm = exp_h24 >= 12 ? 'pm' : 'am';
 
-    return `${phone} - ${code} ${day} ${month} ${h12}${ampm}`; // e.g. "2348123456789 - 1M 25 May 10pm"
+    const st_d = new Date(exp_d - durationDays * 24 * 60 * 60 * 1000);
+    const st_day = st_d.getDate();
+    const st_month = st_d.toLocaleString('en-GB', { month: 'short' });
+    const st_h24 = st_d.getHours();
+    const st_h12 = st_h24 % 12 || 12;
+    const st_ampm = st_h24 >= 12 ? 'pm' : 'am';
+
+    return `${phone} - ${code} ${st_day} ${st_month} ${st_h12}${st_ampm} - ${exp_day} ${exp_month} ${exp_h12}${exp_ampm}`; // e.g. "2348123456789 - 1M 25 May 10pm"
 }
 
 function generatePin() {
