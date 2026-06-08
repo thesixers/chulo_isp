@@ -104,13 +104,6 @@ async function sendExpiryAlerts(db, getSock) {
                     `🎁 *Renew before it expires and get 1 FREE day added!*\n\n` +
                     `Reply *1* to renew now or *HI* for the main menu.`;
 
-            } else if (sub.duration_days === 3 && daysLeft <= 1 && daysLeft > 0) {
-                // 3-day plan — 1 day left
-                message =
-                    `⚠️ *Subscription Expiry Alert*\n\n` +
-                    `Your *${sub.plan_name}* plan expires *tomorrow* (${fmt(sub.expiry_time)}).\n\n` +
-                    `🎁 *Renew before it expires and get 1 FREE day added!*\n\n` +
-                    `Reply *1* to renew now or *HI* for the main menu.`;
             }
             // duration_days === 1: no alert
 
