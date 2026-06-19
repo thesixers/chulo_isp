@@ -9,9 +9,11 @@ const flw = axios.create({
   },
 });
 
-const RETRY_STATUSES = new Set([502, 503, 504]);
+// 503 = broad outage (fail fast — all retries will fail and waste 10s+ of user time)
+// 502/504 = transient gateway blip (worth retrying)
+const RETRY_STATUSES = new Set([502, 504]);
 const RETRY_ATTEMPTS = 3;
-const RETRY_DELAY_MS = 5000;
+const RETRY_DELAY_MS = 3000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -19,7 +21,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Creates a dynamic (temporary) virtual account for a specific transaction.
  * Uses the Flutterwave v3 API — no separate customer creation needed.
  *
- * Automatically retries up to 3 times on 502/503/504 (gateway errors).
+ * Automatically retries up to 3 times on 502/504 (transient gateway blips).
+ * NOTE: A fresh tx_ref is generated per attempt — Flutterwave registers the
+ * tx_ref server-side even when it returns an error, so reusing it causes a
+ * 400 "duplicate" rejection on subsequent attempts.
  *
  * @param {string} phone     - User's phone number
  * @param {number} amount    - Exact plan price the customer must pay
@@ -27,11 +32,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * @returns {Promise<{ txRef: string, accountNumber: string, bankName: string }>}
  */
 export async function createDynamicVirtualAccount(phone, amount, planName) {
-  const txRef = uuidv4(); // generated once — consistent across retries
   const email = `ikedichimo@gmail.com`;
 
   let lastError;
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+    // Fresh tx_ref per attempt — Flutterwave locks the ref server-side even on
+    // error responses, so reusing the same ref causes a 400 on the next retry.
+    const txRef = uuidv4();
+
     try {
       const response = await flw.post("/virtual-account-numbers", {
         email,
