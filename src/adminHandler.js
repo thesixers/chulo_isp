@@ -665,6 +665,7 @@ export async function handleAdminMessage(sock, from, text, db) {
     const existingRes = await db.query(`SELECT * FROM users WHERE phone = $1`, [
       phone,
     ]);
+
     if (existingRes.rows.length) {
       const u = existingRes.rows[0];
       if (u.hotspot_username) {
@@ -683,16 +684,20 @@ export async function handleAdminMessage(sock, from, text, db) {
       // Case 2 — partial user (in DB but never subscribed)
       // We'll reuse their existing row and just fill in the missing credentials.
       adminSessions.set(from, {
-        step: "newuser_name",
+        step: "newuser_device",
         phone,
         existingUserId: u.id,
+        name: u.name,
       });
       await sock.sendMessage(from, {
         text:
           `🔄 *Resume Customer Setup*\n\n` +
           `📞 Phone: *+${phone}* (found in system — no plan yet)\n\n` +
-          `What is the customer's *name*?\n` +
-          `(Reply with their name or type *!cancel*)`,
+          `*Select Device Limit for ${u.name}:*\n` +
+          `1️⃣ Single Device\n` +
+          `2️⃣ Two Devices\n` +
+          `3️⃣ Three Devices\n\n` +
+          `Reply with *1*, *2*, or *3*, or type *!cancel*.`,
       });
       return true;
     }
@@ -785,6 +790,7 @@ async function handleAdminSession(sock, from, text, db, session) {
     await sock.sendMessage(from, {
       text: `*Select Plan for ${choice.label}:*\n\n${lines}\n\nReply with a number (1-${res.rows.length}).`,
     });
+
     return true;
   }
 
@@ -1066,13 +1072,16 @@ async function handleAdminSession(sock, from, text, db, session) {
 
   if (step === "newuser_name") {
     const name = text.trim();
+
     if (!name || name.length < 2) {
       await sock.sendMessage(from, {
         text: `Please enter a valid name (at least 2 characters). (Or type !cancel)`,
       });
       return true;
     }
+
     adminSessions.set(from, { ...session, step: "newuser_device", name });
+
     await sock.sendMessage(from, {
       text:
         `👤 Name: *${name}*\n\n` +
