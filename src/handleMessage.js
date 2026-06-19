@@ -8,18 +8,18 @@ const ADMIN_PHONES = (process.env.ADMIN_PHONE || "")
   .split(",")
   .map((p) => p.trim().replace(/^\+/, ""));
 
-function sanitizeUsername(input) {
+export function sanitizeUsername(input) {
   // Strip emojis and special chars — keep only alphanumeric and underscore (preserve case)
   return input.replace(/[^\w]/g, "").trim();
 }
 
-function isValidUsername(s) {
+export function isValidUsername(s) {
   // Must be 3–20 chars, letters/numbers/underscores, and contain at least one letter
   // (prevents purely numeric usernames which would clash with page numbers in admin commands)
   return /^[a-zA-Z0-9_]{3,20}$/.test(s) && /[a-zA-Z]/.test(s);
 }
 
-function isValidPassword(s) {
+export function isValidPassword(s) {
   return /^\d{4}$/.test(s); // exactly 4 digits
 }
 
@@ -946,14 +946,14 @@ export async function handleMessage(
         await sock.sendMessage(from, {
           text:
             `❌ Invalid username. Use only *letters, numbers, or underscores* (3–20 chars).\n\n` +
-            `Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again:`,
+            `Example: \`john\` or \`John_2\` or \`john20\`, etc.\n\nTry again:`,
         });
         break;
       }
 
-      // Check if username is already taken (case-insensitively)
+      // Check if username is taken (case-sensitive — Jenny and JeNNy are different users)
       const checkRes = await db.query(
-        `SELECT id FROM users WHERE LOWER(hotspot_username) = LOWER($1) AND id != $2`,
+        `SELECT id FROM users WHERE hotspot_username = $1 AND id != $2`,
         [raw, user.id]
       );
       if (checkRes.rowCount > 0) {
@@ -1166,9 +1166,9 @@ export async function handleMessage(
         break;
       }
 
-      // Check if username is already taken (case-insensitively)
+      // Check if username is taken (case-sensitive — Jenny and JeNNy are different users)
       const checkRes = await db.query(
-        `SELECT id FROM users WHERE LOWER(hotspot_username) = LOWER($1) AND id != $2`,
+        `SELECT id FROM users WHERE hotspot_username = $1 AND id != $2`,
         [raw, user.id]
       );
       if (checkRes.rowCount > 0) {

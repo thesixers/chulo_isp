@@ -58,8 +58,9 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS hotspot_username VARCHAR(50);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS hotspot_password VARCHAR(100);
 
--- Ensure hotspot_username is unique case-insensitively (excluding nulls)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_unique_hotspot_username ON users (LOWER(hotspot_username)) WHERE hotspot_username IS NOT NULL;
+-- Ensure hotspot_username is unique case-sensitively (Jenny and JeNNy are different users)
+DROP INDEX IF EXISTS idx_users_unique_hotspot_username;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_unique_hotspot_username ON users (hotspot_username) WHERE hotspot_username IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS plans (
     id SERIAL PRIMARY KEY,

@@ -13,6 +13,7 @@
  */
 
 import { provisionOrQueue } from "./fulfillPayment.js";
+import { isValidPassword, isValidUsername, sanitizeUsername } from "./handleMessage.js";
 
 const adminSessions = new Map();
 const PAGE_SIZE = 5;
@@ -683,22 +684,39 @@ export async function handleAdminMessage(sock, from, text, db) {
 
       // Case 2 — partial user (in DB but never subscribed)
       // We'll reuse their existing row and just fill in the missing credentials.
-      adminSessions.set(from, {
-        step: "newuser_device",
-        phone,
-        existingUserId: u.id,
-        name: u.name,
-      });
-      await sock.sendMessage(from, {
-        text:
-          `🔄 *Resume Customer Setup*\n\n` +
-          `📞 Phone: *+${phone}* (found in system — no plan yet)\n\n` +
-          `*Select Device Limit for ${u.name}:*\n` +
-          `1️⃣ Single Device\n` +
-          `2️⃣ Two Devices\n` +
-          `3️⃣ Three Devices\n\n` +
-          `Reply with *1*, *2*, or *3*, or type *!cancel*.`,
-      });
+      if (u.name) {
+        // Name already known — skip straight to device selection
+        adminSessions.set(from, {
+          step: "newuser_device",
+          phone,
+          existingUserId: u.id,
+          name: u.name,
+        });
+        await sock.sendMessage(from, {
+          text:
+            `🔄 *Resume Customer Setup*\n\n` +
+            `📞 Phone: *+${phone}* (found in system — no plan yet)\n\n` +
+            `*Select Device Limit for ${u.name}:*\n` +
+            `1️⃣ Single Device\n` +
+            `2️⃣ Two Devices\n` +
+            `3️⃣ Three Devices\n\n` +
+            `Reply with *1*, *2*, or *3*, or type *!cancel*.`,
+        });
+      } else {
+        // Name unknown — ask for it first (same as new user flow)
+        adminSessions.set(from, {
+          step: "newuser_name",
+          phone,
+          existingUserId: u.id,
+        });
+        await sock.sendMessage(from, {
+          text:
+            `🔄 *Resume Customer Setup*\n\n` +
+            `📞 Phone: *+${phone}* (found in system — no plan yet)\n\n` +
+            `What is the customer's *name*?\n` +
+            `(Reply with their name or type *!cancel*)`,
+        });
+      }
       return true;
     }
 
@@ -1165,17 +1183,29 @@ async function handleAdminSession(sock, from, text, db, session) {
   }
 
   if (step === "newuser_username") {
-    const username = text.trim().toLowerCase();
-    // Underscores excluded — MikroTik hotspot usernames must be alphanumeric only
-    if (!/^[a-z0-9]{3,20}$/.test(username)) {
+    const username = sanitizeUsername(text);
+    // MikroTik hotspot usernames must be alphanumeric and underscores only
+    if (/^\d+$/.test(username)) {
       await sock.sendMessage(from, {
-        text: `❌ Invalid username. Use 3–20 letters/numbers only (no spaces or special characters). (Or type !cancel)`,
+        text:
+          `❌ Usernames cannot be numbers only.\n\n` +
+          `Please include at least one letter. Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again:`,
       });
       return true;
     }
-    // Check if username is taken on MikroTik/DB
+
+    if (!isValidUsername(username)) {
+      await sock.sendMessage(from, {
+        text:
+          `❌ Invalid username. Use only *letters, numbers, or underscores* (3–20 chars).\n\n` +
+          `Example: \`john\` or \`John_2\` or \`john20\`, etc.\n\nTry again:`,
+      });
+      return true;
+    }
+
+    // Check if username is taken (case-sensitive — Jenny and JeNNy are different users)
     const takenRes = await db.query(
-      `SELECT id FROM users WHERE LOWER(hotspot_username) = $1`,
+      `SELECT id FROM users WHERE hotspot_username = $1`,
       [username],
     );
     if (takenRes.rows.length) {
@@ -1198,9 +1228,9 @@ async function handleAdminSession(sock, from, text, db, session) {
 
   if (step === "newuser_password") {
     const password = text.trim();
-    if (!password || password.length < 4) {
+    if (!isValidPassword(password)) {
       await sock.sendMessage(from, {
-        text: `❌ Password must be at least 4 characters. (Or type !cancel)`,
+        text: `❌ Password must be exactly *4 digits* (e.g. 1234). Please try again:`,
       });
       return true;
     }
