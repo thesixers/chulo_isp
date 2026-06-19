@@ -51,7 +51,9 @@ export async function handleAdminMessage(sock, from, text, db) {
                 `📋 !subscriptions [page | username]\n` +
                 `   All subscriptions (paginated) or subs for a specific user\n\n` +
                 `⚡ !activate <username>\n` +
-                `   Manually activate a plan for a user (cash payment)\n\n` +
+                `   Manually activate a plan for an existing user (cash payment)\n\n` +
+                `🆕 !newuser <phone>\n` +
+                `   Create & activate a plan for a brand-new customer\n\n` +
                 `🗑️ !delsub <username>\n` +
                 `   Delete a subscription for a user (active or queued)\n\n` +
                 `📢 !broadcast <message>\n` +
@@ -524,6 +526,52 @@ export async function handleAdminMessage(sock, from, text, db) {
         return true;
     }
 
+    // ── Create & activate a plan for a brand-new user ─────────────────────
+    if (cmd === '!newuser') {
+        const rawPhone = (parts[1] || '').replace(/\D/g, '');
+
+        // Normalise first so we can validate final length
+        let phoneCheck = rawPhone;
+        if (phoneCheck.startsWith('0')) phoneCheck = '234' + phoneCheck.slice(1);
+        if (!phoneCheck.startsWith('234')) phoneCheck = '234' + phoneCheck;
+
+        // Nigerian numbers: country code 234 + 10 digits = 13 digits total
+        if (!rawPhone || phoneCheck.length !== 13) {
+            await sock.sendMessage(from, { text: `❌ Invalid phone number.\nUsage: *!newuser <phone>*\nExample: !newuser 08012345678 or !newuser 2348012345678` });
+            return true;
+        }
+
+        // Normalise: strip leading 0, prepend 234 if needed
+        let phone = rawPhone;
+        if (phone.startsWith('0')) phone = '234' + phone.slice(1);
+        else if (!phone.startsWith('234')) phone = '234' + phone;
+
+        // Check if user already exists
+        const existingRes = await db.query(`SELECT * FROM users WHERE phone = $1`, [phone]);
+        if (existingRes.rows.length) {
+            const u = existingRes.rows[0];
+            await sock.sendMessage(from, {
+                text:
+                    `ℹ️ *User already exists!*\n\n` +
+                    `👤 Name: *${u.name || 'Unknown'}*\n` +
+                    `📞 Phone: *${u.phone}*\n` +
+                    `🌐 Username: *${u.hotspot_username || 'Not set'}*\n\n` +
+                    `Use *!activate ${u.hotspot_username || u.phone}* to give them a plan instead.`
+            });
+            return true;
+        }
+
+        adminSessions.set(from, { step: 'newuser_name', phone });
+        await sock.sendMessage(from, {
+            text:
+                `🆕 *New Customer Setup*\n\n` +
+                `📞 Phone: *+${phone}*\n\n` +
+                `What is the customer's *name*?\n` +
+                `(Reply with their name or type *!cancel*)`
+        });
+        return true;
+    }
+
     // ── Add a new plan ────────────────────────────────────────────────────
     if (cmd === '!addplan') {
         adminSessions.set(from, { step: 'addplan_device' });
@@ -804,6 +852,247 @@ async function handleAdminSession(sock, from, text, db, session) {
         } catch (err) {
             console.error('!delsub failed:', err.message);
             await sock.sendMessage(from, { text: `❌ Failed to delete subscription: ${err.message}` });
+        }
+        return true;
+    }
+
+    // ── !newuser steps ─────────────────────────────────────────────────
+
+    if (step === 'newuser_name') {
+        const name = text.trim();
+        if (!name || name.length < 2) {
+            await sock.sendMessage(from, { text: `Please enter a valid name (at least 2 characters). (Or type !cancel)` });
+            return true;
+        }
+        adminSessions.set(from, { ...session, step: 'newuser_device', name });
+        await sock.sendMessage(from, {
+            text:
+                `👤 Name: *${name}*\n\n` +
+                `*Select Device Limit:*\n` +
+                `1️⃣ Single Device\n` +
+                `2️⃣ Two Devices\n` +
+                `3️⃣ Three Devices\n\n` +
+                `Reply with *1*, *2*, or *3*, or type *!cancel*.`
+        });
+        return true;
+    }
+
+    if (step === 'newuser_device') {
+        const profileMap = {
+            '1': { profile: '7/7_Mbps_1Users', label: 'Single Device' },
+            '2': { profile: '7/7_Mbps_2Users', label: 'Two Devices' },
+            '3': { profile: '7/7_Mbps_3Users', label: 'Three Devices' },
+        };
+        const choice = profileMap[text.trim()];
+        if (!choice) {
+            await sock.sendMessage(from, { text: `Please reply with *1*, *2*, or *3*. (Or type !cancel)` });
+            return true;
+        }
+
+        const plansRes = await db.query(
+            `SELECT * FROM plans WHERE mikrotik_profile = $1 ORDER BY duration_days ASC`,
+            [choice.profile]
+        );
+        if (!plansRes.rows.length) {
+            await sock.sendMessage(from, { text: `❌ No plans found for *${choice.label}*. Use !addplan to create one first.` });
+            adminSessions.delete(from);
+            return true;
+        }
+
+        adminSessions.set(from, { ...session, step: 'newuser_plan', ...choice, plans: plansRes.rows });
+
+        const lines = plansRes.rows.map((p, i) =>
+            `${i + 1}️⃣ *${p.name}* — ₦${Number(p.price).toLocaleString()}`
+        ).join('\n');
+
+        await sock.sendMessage(from, {
+            text: `📡 *Select Plan for ${choice.label}:*\n\n${lines}\n\nReply with a number (1-${plansRes.rows.length}).`
+        });
+        return true;
+    }
+
+    if (step === 'newuser_plan') {
+        const position = parseInt(text.trim(), 10);
+        const { plans } = session;
+        if (isNaN(position) || position < 1 || position > plans.length) {
+            await sock.sendMessage(from, { text: `Please reply with a valid number from the list. (Or type !cancel)` });
+            return true;
+        }
+        const plan = plans[position - 1];
+        adminSessions.set(from, { ...session, step: 'newuser_username', plan });
+        await sock.sendMessage(from, {
+            text:
+                `📝 *Set Hotspot Username*\n\n` +
+                `Choose a username for *${session.name}*'s hotspot login.\n\n` +
+                `Rules:\n` +
+                `• Letters and numbers only (no spaces)\n` +
+                `• 3–20 characters\n` +
+                `• Example: \`emeka\` or \`emeka2024\`\n\n` +
+                `Reply with the username:`
+        });
+        return true;
+    }
+
+    if (step === 'newuser_username') {
+        const username = text.trim().toLowerCase();
+        // Underscores excluded — MikroTik hotspot usernames must be alphanumeric only
+        if (!/^[a-z0-9]{3,20}$/.test(username)) {
+            await sock.sendMessage(from, { text: `❌ Invalid username. Use 3–20 letters/numbers only (no spaces or special characters). (Or type !cancel)` });
+            return true;
+        }
+        // Check if username is taken on MikroTik/DB
+        const takenRes = await db.query(
+            `SELECT id FROM users WHERE LOWER(hotspot_username) = $1`, [username]
+        );
+        if (takenRes.rows.length) {
+            await sock.sendMessage(from, { text: `❌ Username *${username}* is already taken. Try a different one.` });
+            return true;
+        }
+        adminSessions.set(from, { ...session, step: 'newuser_password', username });
+        await sock.sendMessage(from, {
+            text:
+                `🔐 *Set Hotspot Password*\n\n` +
+                `Choose a password for *${username}*.\n\n` +
+                `• At least 4 characters\n` +
+                `• Example: \`pass1234\`\n\n` +
+                `Reply with the password:`
+        });
+        return true;
+    }
+
+    if (step === 'newuser_password') {
+        const password = text.trim();
+        if (!password || password.length < 4) {
+            await sock.sendMessage(from, { text: `❌ Password must be at least 4 characters. (Or type !cancel)` });
+            return true;
+        }
+
+        // BUG FIX: Compute expiry HERE and store it in the session.
+        // If we recomputed it in newuser_confirm, a delay between steps would
+        // cause the expiry shown in the summary to differ from what's saved to DB.
+        const newExpiry = new Date();
+        newExpiry.setDate(newExpiry.getDate() + session.plan.duration_days);
+
+        adminSessions.set(from, { ...session, step: 'newuser_confirm', password, newExpiry: newExpiry.toISOString() });
+
+        await sock.sendMessage(from, {
+            text:
+                `✅ *Confirm New Customer*\n\n` +
+                `📞 Phone: *+${session.phone}*\n` +
+                `👤 Name: *${session.name}*\n` +
+                `🌐 Username: *${session.username}*\n` +
+                `🔑 Password: *${password}*\n` +
+                `📡 Plan: *${session.plan.name}* — ₦${Number(session.plan.price).toLocaleString()}\n` +
+                `📱 Devices: *${session.label}*\n` +
+                `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
+                `Reply *YES* to create & activate, or *NO* to cancel.`
+        });
+        return true;
+    }
+
+    if (step === 'newuser_confirm') {
+        if (text.trim().toLowerCase() !== 'yes') {
+            adminSessions.delete(from);
+            await sock.sendMessage(from, { text: `❌ New user creation cancelled.` });
+            return true;
+        }
+
+        const { phone, name, username, password, plan, newExpiry: newExpiryISO } = session;
+        // Reuse the exact expiry computed during newuser_password — no drift
+        const newExpiry = new Date(newExpiryISO);
+        adminSessions.delete(from);
+
+        await sock.sendMessage(from, { text: `⏳ Creating account and provisioning *${username}* on MikroTik...` });
+
+        // BUG FIX: Wrap all DB writes in a transaction so a mid-flight error
+        // (e.g. subscription insert fails) doesn't leave an orphaned user record.
+        const client = await db.connect();
+        let newUser;
+        let txError = null;
+        try {
+            await client.query('BEGIN');
+
+            // 1. Create user record
+            const userInsert = await client.query(`
+                INSERT INTO users (phone, name, hotspot_username, hotspot_password, status, created_at)
+                VALUES ($1, $2, $3, $4, 'active', CURRENT_TIMESTAMP)
+                RETURNING *
+            `, [phone, name, username, password]);
+            newUser = userInsert.rows[0];
+
+            // 2. Create whatsapp_sessions row so the bot recognises them later
+            await client.query(`
+                INSERT INTO whatsapp_sessions (phone, remote_jid, state, last_updated)
+                VALUES ($1, $2, 'start', CURRENT_TIMESTAMP)
+                ON CONFLICT (phone) DO NOTHING
+            `, [phone, `${phone}@s.whatsapp.net`]);
+
+            // 3. Record cash payment
+            await client.query(`
+                INSERT INTO payments (user_id, amount, status, provider, method, paid_at)
+                VALUES ($1, $2, 'completed', 'admin_manual', 'cash', CURRENT_TIMESTAMP)
+            `, [newUser.id, plan.price]);
+
+            // 4. Create active subscription
+            await client.query(`
+                INSERT INTO subscriptions (user_id, plan_id, status, start_time, expiry_time, alert_sent)
+                VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3, false)
+            `, [newUser.id, plan.id, newExpiry]);
+
+            await client.query('COMMIT');
+        } catch (err) {
+            txError = err;
+            try { await client.query('ROLLBACK'); } catch (_) { /* connection already dead */ }
+        } finally {
+            // Always release — even if ROLLBACK itself throws
+            client.release();
+        }
+        if (txError) {
+            console.error('!newuser DB transaction failed:', txError.message);
+            await sock.sendMessage(from, { text: `❌ Failed to create user: ${txError.message}` });
+            return true;
+        }
+
+        try {
+            // 5. Provision on MikroTik (outside transaction — MikroTik is not a DB)
+            const targetJid = `${phone}@s.whatsapp.net`;
+            await provisionOrQueue(db, sock, newUser, plan, targetJid, username, password, false, newExpiry, true);
+
+            // 6. Confirm to admin
+            await sock.sendMessage(from, {
+                text:
+                    `✅ *New Customer Created & Activated!*\n\n` +
+                    `📞 Phone: *+${phone}*\n` +
+                    `👤 Name: *${name}*\n` +
+                    `🌐 Username: *${username}*\n` +
+                    `📡 Plan: *${plan.name}*\n` +
+                    `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
+                    `MikroTik provisioned ✅`
+            });
+
+            // 7. Notify customer on WhatsApp
+            try {
+                await sock.sendMessage(targetJid, {
+                    text:
+                        `👋 *Welcome to Chulo Speednet!*\n\n` +
+                        `Your account has been set up by our team.\n\n` +
+                        `🌐 *Your Login Details*\n` +
+                        `Username: \`${username}\`\n` +
+                        `Password: \`${password}\`\n\n` +
+                        `📡 Plan: *${plan.name}*\n` +
+                        `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
+                        `Connect at: *http://10.5.50.1*\n\n` +
+                        `Send *HI* anytime to manage your account. Enjoy! 🛰️`
+                });
+            } catch (notifyErr) {
+                console.error('Failed to notify new user:', notifyErr.message);
+                await sock.sendMessage(from, {
+                    text: `⚠️ Account created but couldn't send WhatsApp notification to +${phone}. Share the credentials manually.`
+                });
+            }
+        } catch (err) {
+            console.error('!newuser post-DB step failed:', err.message);
+            await sock.sendMessage(from, { text: `⚠️ User was created in DB but an error occurred after: ${err.message}` });
         }
         return true;
     }
