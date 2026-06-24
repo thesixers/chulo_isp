@@ -1,7 +1,7 @@
 import { createDynamicVirtualAccount } from "./flutterwave.js";
 import { provisionOrQueue } from "./fulfillPayment.js";
 
-import { provisionHotspotUser, buildMikrotikComment } from "./mikrotik.js";
+import { provisionHotspotUser, buildMikrotikComment, removeActiveSessions } from "./mikrotik.js";
 import { handleAdminMessage } from "./adminHandler.js";
 
 const ADMIN_PHONES = (process.env.ADMIN_PHONE || "")
@@ -1091,22 +1091,27 @@ export async function handleMessage(
           });
           break;
         }
+
         await db.query(`UPDATE users SET hotspot_password = $1 WHERE id = $2`, [
           pass,
           user.id,
         ]);
+
         const planRes = await db.query(`SELECT * FROM plans WHERE id = $1`, [
           session.plan_id,
         ]);
+
         const plan = planRes.rows[0];
         await updateSession(db, phone, "start", null, from);
         await sock.sendMessage(from, {
           text: `⏳ Setting up your account as *${username}*...`,
         });
+
         const subRes = await db.query(
           `SELECT expiry_time FROM subscriptions WHERE user_id = $1 AND status = 'active' ORDER BY id DESC LIMIT 1`,
           [user.id]
         );
+
         const expiryTime = subRes.rows[0]?.expiry_time || null;
         await provisionOrQueue(
           db,
@@ -1291,6 +1296,7 @@ export async function handleMessage(
         });
         await apiConn.connect();
         try {
+          removeActiveSessions(oldUser); // fire-and-forget: kick old session
           await apiConn.write("/ip/hotspot/user/remove", [
             `=numbers=${oldUser}`,
           ]);
@@ -1395,6 +1401,7 @@ export async function handleMessage(
         });
         break;
       }
+
       const username = user.hotspot_username || phone;
       const sub = await getActiveSubscription(db, user.id);
       if (!sub) {
@@ -1417,6 +1424,7 @@ export async function handleMessage(
           newPass,
           comment
         );
+        removeActiveSessions(username);
         await db.query(`UPDATE users SET hotspot_password = $1 WHERE id = $2`, [
           newPass,
           user.id,

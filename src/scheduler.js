@@ -1,5 +1,6 @@
 import {
   removeHotspotUser,
+  removeActiveSessions,
   provisionHotspotUser,
   buildMikrotikComment,
 } from "./mikrotik.js";
@@ -35,35 +36,37 @@ async function cleanupExpiredUsers(db) {
                 SELECT id FROM subscriptions 
                 WHERE user_id = $1 AND status = 'active' AND expiry_time > NOW()
             `,
-        [row.user_id]
+        [row.user_id],
       );
 
       if (activeCheck.rowCount === 0) {
         try {
+          // Fire-and-forget: errors are handled internally inside removeActiveSessions
+          removeActiveSessions(row.hotspot_username);
           await removeHotspotUser(row.hotspot_username);
           removed++;
         } catch (err) {
           console.error(
             `Scheduler: MikroTik removal failed for '${row.hotspot_username}':`,
-            err.message
+            err.message,
           );
           failed++;
         }
       } else {
         console.log(
-          `🧹 Cleanup: Skipped removal for '${row.hotspot_username}' (they transitioned to a queued plan)`
+          `🧹 Cleanup: Skipped removal for '${row.hotspot_username}' (they transitioned to a queued plan)`,
         );
       }
       // Mark as expired in DB regardless of MikroTik result
       await db.query(
         `UPDATE subscriptions SET status = 'expired' WHERE id = $1`,
-        [row.sub_id]
+        [row.sub_id],
       );
     }
 
     if (res.rows.length > 0) {
       console.log(
-        `🧹 Cleanup: ${removed} removed, ${failed} failed out of ${res.rows.length} expired subscriptions`
+        `🧹 Cleanup: ${removed} removed, ${failed} failed out of ${res.rows.length} expired subscriptions`,
       );
     }
   } catch (err) {
@@ -131,7 +134,7 @@ async function sendExpiryAlerts(db, getSock) {
         message =
           `⚠️ *Subscription Expiry Alert*\n\n` +
           `Your *${sub.plan_name}* plan expires *tomorrow* (${fmt(
-            sub.expiry_time
+            sub.expiry_time,
           )}).\n\n` +
           `🎁 *Renew before it expires and get 1 FREE day added!*\n\n` +
           `Reply *1* to renew now or *HI* for the main menu.`;
@@ -143,13 +146,13 @@ async function sendExpiryAlerts(db, getSock) {
           await sock.sendMessage(sub.remote_jid, { text: message });
           await db.query(
             `UPDATE subscriptions SET alert_sent = true WHERE id = $1`,
-            [sub.id]
+            [sub.id],
           );
           console.log(`📨 Expiry alert sent to ${sub.phone}`);
         } catch (err) {
           console.error(
             `Scheduler: failed to send alert to ${sub.phone}:`,
-            err.message
+            err.message,
           );
         }
       }
@@ -187,22 +190,22 @@ async function activateQueuedUsers(db, getSock) {
         const comment = buildMikrotikComment(
           row.phone,
           row.duration_days,
-          row.expiry_time
+          row.expiry_time,
         );
         await provisionHotspotUser(
           row.hotspot_username,
           row.mikrotik_profile,
           row.hotspot_password,
-          comment
+          comment,
         );
 
         // Mark active in DB
         await db.query(
           `UPDATE subscriptions SET status = 'active' WHERE id = $1`,
-          [row.sub_id]
+          [row.sub_id],
         );
         console.log(
-          `✅ Scheduler: Activated queued plan for '${row.hotspot_username}'`
+          `✅ Scheduler: Activated queued plan for '${row.hotspot_username}'`,
         );
 
         // Notify user on WhatsApp
@@ -217,7 +220,7 @@ async function activateQueuedUsers(db, getSock) {
       } catch (err) {
         console.error(
           `❌ Scheduler: Failed to activate queued plan for '${row.hotspot_username}':`,
-          err.message
+          err.message,
         );
         // Leave it as 'queued', it will retry on the next minute tick
       }
