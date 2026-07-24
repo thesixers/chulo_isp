@@ -40,7 +40,6 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
   const reqBody = {
     email,
     is_permanent: false,
-    tx_ref: txRef,
     amount,
     currency: "NGN",
     narration: `Chulo Speednet ${planName}`,
@@ -48,7 +47,8 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
     firstname: "Chulo",
     lastname: "Speednet",
     frequency: 1,
-  }
+    narration,
+  };
 
   let lastError;
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
@@ -57,7 +57,10 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
     const txRef = uuidv4();
 
     try {
-      const response = await flw.post("/virtual-account-numbers", reqBody);
+      const response = await flw.post("/virtual-account-numbers", {
+        ...reqBody,
+        tx_ref: txRef,
+      });
 
       const data = response.data.data;
       return {
@@ -103,7 +106,11 @@ export async function verifyPayment(txRef, amount) {
       params: { tx_ref: txRef },
     });
 
-    if(response.data.status === "success" && response.data.data.amount === amount && response.data.data.tx_ref === txRef) {
+    if (
+      response.data.status === "success" &&
+      response.data.data.amount === amount &&
+      response.data.data.tx_ref === txRef
+    ) {
       console.log("Payment verified successfully.");
       return true;
     } else {
