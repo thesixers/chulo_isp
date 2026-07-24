@@ -8,7 +8,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "node --watch --env-file=.env src/index.js",
     "start": "node --env-file=.env src/index.js",
-    "db:seed": "node --env-file=.env db/seed.js"
+    "db:seed": "node --env-file=.env db/seed.js",
+    "ft:test": "node --env-file=.env scripts/test-flutter.js",
+    "rev:test": "node --env-file=.env scripts/test-revenue.js"
   },
   "keywords": [],
   "author": "",

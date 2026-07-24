@@ -33,6 +33,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  */
 export async function createDynamicVirtualAccount(phone, amount, planName) {
   const email = `ikedichimo@gmail.com`;
+  const narration = `Chulo Speednet ${planName}`;
+  const chuloPhone =
+    process.env.ADMIN_PHONE.split(",")[0].replace("234", "0") || "08112677404";
+
+  const reqBody = {
+    email,
+    is_permanent: false,
+    tx_ref: txRef,
+    amount,
+    currency: "NGN",
+    narration: `Chulo Speednet ${planName}`,
+    phonenumber: chuloPhone,
+    firstname: "Chulo",
+    lastname: "Speednet",
+    frequency: 1,
+  }
 
   let lastError;
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
@@ -41,18 +57,7 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
     const txRef = uuidv4();
 
     try {
-      const response = await flw.post("/virtual-account-numbers", {
-        email,
-        is_permanent: false,
-        tx_ref: txRef,
-        amount,
-        currency: "NGN",
-        narration: `Chulo Speednet ${planName}`,
-        phonenumber: phone,
-        firstname: "Chulo",
-        lastname: "Speednet",
-        frequency: 1, // single-use: expires after one successful payment
-      });
+      const response = await flw.post("/virtual-account-numbers", reqBody);
 
       const data = response.data.data;
       return {
@@ -67,7 +72,9 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
 
       if (RETRY_STATUSES.has(status) && attempt < RETRY_ATTEMPTS) {
         console.warn(
-          `Flutterwave ${status} on attempt ${attempt}/${RETRY_ATTEMPTS} — retrying in ${RETRY_DELAY_MS / 1000}s...`,
+          `Flutterwave ${status} on attempt ${attempt}/${RETRY_ATTEMPTS} — retrying in ${
+            RETRY_DELAY_MS / 1000
+          }s...`
         );
         await sleep(RETRY_DELAY_MS);
         continue;
@@ -75,7 +82,7 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
 
       console.error(
         "Flutterwave Virtual Account Error:",
-        error.response?.data || error.message,
+        error.response?.data || error.message
       );
       break;
     }
@@ -92,24 +99,23 @@ export async function createDynamicVirtualAccount(phone, amount, planName) {
  */
 export async function verifyPayment(txRef, amount) {
   try {
-    const response = await flw.get("/transactions", {
+    const response = await flw.get("/transactions/verify_by_reference", {
       params: { tx_ref: txRef },
     });
 
-    const transactions = response.data?.data || [];
-    const match = transactions.find(
-      (t) =>
-        t.tx_ref === txRef &&
-        t.status === "successful" &&
-        t.currency === "NGN" &&
-        Number(t.amount) >= Number(amount),
-    );
+    if(response.data.status === "success" && response.data.data.amount === amount && response.data.data.tx_ref === txRef) {
+      console.log("Payment verified successfully.");
+      return true;
+    } else {
+      console.log("Payment verification failed.");
+      return false;
+    }
 
-    return !!match;
+    // return !!match;
   } catch (err) {
     console.error(
       "Flutterwave verification error:",
-      err.response?.data || err.message,
+      err.response?.data || err.message
     );
     // On API/network error return false — never falsely confirm an unpaid transaction
     return false;

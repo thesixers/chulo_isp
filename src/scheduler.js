@@ -16,18 +16,20 @@ const fmt = (d) =>
 // Job A — Remove expired subscribers from MikroTik every 30 minutes
 // (only removes from the router; keeps DB record for history)
 // ─────────────────────────────────────────────────────────────────────────────
-async function cleanupExpiredUsers(db) {
+async function cleanupExpiredUsers(db, getSock) {
   let removed = 0,
     failed = 0;
   try {
     const res = await db.query(`
-            SELECT s.id AS sub_id, u.hotspot_username, u.id AS user_id
+            SELECT s.id AS sub_id, u.hotspot_username, u.id AS user_id, remote_jid
             FROM subscriptions s
             JOIN users u ON u.id = s.user_id
             WHERE s.status = 'active'
               AND s.expiry_time < NOW()
               AND u.hotspot_username IS NOT NULL
         `);
+
+        const sock = getSock();
 
     for (const row of res.rows) {
       // Check if user has a newly activated subscription (from queue)
@@ -41,9 +43,24 @@ async function cleanupExpiredUsers(db) {
 
       if (activeCheck.rowCount === 0) {
         try {
-          // Fire-and-forget: errors are handled internally inside removeActiveSessions
-          removeActiveSessions(row.hotspot_username);
-          await removeHotspotUser(row.hotspot_username);
+
+          setTimeout(async () => {
+            if (sock) {
+              await sock.sendMessage(row.remote_jid, {
+                text:
+                  `🧹 *Your Subscription Has Expired*\n\n` +
+                  `Your MikroTik profile has been removed from the router as your plan has expired.\n\n` +
+                  `🎁 *Renew now to continue enjoying our service!*\n\n` +
+                  `Reply *1* to renew or *HI* for the main menu.`,
+              });
+            }
+          }, 1000);
+
+         setTimeout(async () => {
+           // Fire-and-forget: errors are handled internally inside removeActiveSessions
+           removeActiveSessions(row.hotspot_username);
+           await removeHotspotUser(row.hotspot_username);
+         }, 3000);
           removed++;
         } catch (err) {
           console.error(
@@ -143,7 +160,9 @@ async function sendExpiryAlerts(db, getSock) {
 
       if (message) {
         try {
-          await sock.sendMessage(sub.remote_jid, { text: message });
+          setTimeout(async () => {
+            await sock.sendMessage(sub.remote_jid, { text: message });
+          }, 2000);
           await db.query(
             `UPDATE subscriptions SET alert_sent = true WHERE id = $1`,
             [sub.id],
@@ -210,12 +229,14 @@ async function activateQueuedUsers(db, getSock) {
 
         // Notify user on WhatsApp
         if (sock && row.remote_jid) {
-          await sock.sendMessage(row.remote_jid, {
-            text:
-              `🎉 *Your Queued Plan is Active!*\n\n` +
-              `Your old plan has expired and your new *${row.plan_name}* plan is now running.\n` +
-              `Your MikroTik profile has been updated automatically! 🛰️`,
-          });
+          setTimeout(async () => {
+            await sock.sendMessage(row.remote_jid, {
+              text:
+                `🎉 *Your Queued Plan is Active!*\n\n` +
+                `Your old plan has expired and your new *${row.plan_name}* plan is now running.\n` +
+                `Your MikroTik profile has been updated automatically! 🛰️`,
+            });
+          }, 2000);
         }
       } catch (err) {
         console.error(
@@ -238,7 +259,7 @@ export function startScheduler(db, getSock) {
   console.log("⏰ Scheduler started");
 
   // Job A: cleanup every 30 minutes
-  setInterval(() => cleanupExpiredUsers(db), 30 * 60 * 1000);
+  setInterval(() => cleanupExpiredUsers(db, getSock), 30 * 60 * 1000);
 
   // Job B: expiry alerts every 1 hour
   setInterval(() => sendExpiryAlerts(db, getSock), 60 * 60 * 1000);
@@ -247,7 +268,7 @@ export function startScheduler(db, getSock) {
   setInterval(() => activateQueuedUsers(db, getSock), 60 * 1000);
 
   // Run immediately on startup too
-  cleanupExpiredUsers(db);
+  cleanupExpiredUsers(db, getSock);
   sendExpiryAlerts(db, getSock);
   activateQueuedUsers(db, getSock);
 }

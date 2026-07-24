@@ -490,6 +490,33 @@ export async function handleAdminMessage(sock, from, text, db) {
     return true;
   }
 
+  // money made every month since creation
+  if(cmd === "!revenue") {
+    const revenue = await db.query(
+      `SELECT TO_CHAR(paid_at, 'Mon YYYY') AS month, 
+      SUM(amount) AS total
+       FROM payments
+       WHERE status = 'completed'
+       GROUP BY DATE_TRUNC('month', paid_at), 
+       TO_CHAR(paid_at, 'Mon YYYY')
+       ORDER BY DATE_TRUNC('month', paid_at);`
+    );
+
+    if (revenue.rows.length === 0) {
+      await sock.sendMessage(from, { text: "No revenue data found." });
+      return true;
+    }
+
+    const lines = revenue.rows
+      .map((row) => `📅 ${row.month} — 💰 ₦${Number(row.total).toLocaleString()}`)
+      .join("\n");
+
+    await sock.sendMessage(from, {
+      text: `💰 *Revenue Data:*\n\n${lines}`,
+    });
+    return true;
+  }
+
   // ── Broadcast to all active subscribers ───────────────────────────────
   if (cmd === "!broadcast") {
     const broadcastMsg = parts.slice(1).join(" ");
