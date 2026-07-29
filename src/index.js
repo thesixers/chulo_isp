@@ -65,6 +65,7 @@ app.get("/", () => "Welcome to Chulo Speednet");
 
 // Flutterwave Webhook
 app.post("/webhook/flutterwave", async (req, res) => {
+  console.log("Received flutterwave webhook");
   // 1. Verify signature — Flutterwave sends the secret hash you set in the dashboard
   //    as a plain string in the 'verif-hash' header (no HMAC needed)
   const signature = req.headers["verif-hash"];
@@ -77,6 +78,8 @@ app.post("/webhook/flutterwave", async (req, res) => {
   res.status(200).send("OK");
 
   const event = req.body;
+
+  console.log(event);
 
   if (process.env.NODE_ENV == "production") {
     // v3 bank transfer webhook: status and tx_ref are inside event.data
