@@ -21,15 +21,16 @@ async function cleanupExpiredUsers(db, getSock) {
     failed = 0;
   try {
     const res = await db.query(`
-            SELECT s.id AS sub_id, u.hotspot_username, u.id AS user_id, remote_jid
+            SELECT s.id AS sub_id, u.hotspot_username, u.id AS user_id, ws.remote_jid
             FROM subscriptions s
             JOIN users u ON u.id = s.user_id
+            LEFT JOIN whatsapp_sessions ws ON ws.phone = u.phone
             WHERE s.status = 'active'
               AND s.expiry_time < NOW()
               AND u.hotspot_username IS NOT NULL
         `);
 
-        const sock = getSock();
+    const sock = getSock();
 
     for (const row of res.rows) {
       // Check if user has a newly activated subscription (from queue)

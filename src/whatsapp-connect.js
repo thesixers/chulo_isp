@@ -59,15 +59,17 @@ export async function connectToWhatsApp(onMessage, onReconnect) {
     }
 
     if (connection === "close") {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !==
-        DisconnectReason.loggedOut;
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const reason = lastDisconnect?.error?.message || "Unknown Error";
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
       if (shouldReconnect) {
-        // On reconnect, update the caller's socket reference
-        connectToWhatsApp(onMessage, onReconnect).then((newSock) => {
-          if (onReconnect) onReconnect(newSock);
-        });
+        console.log(`⚠️ Connection closed (Code: ${statusCode}, Reason: ${reason}). Reconnecting in 5s...`);
+        setTimeout(() => {
+          connectToWhatsApp(onMessage, onReconnect);
+        }, 5000);
+      } else {
+        console.log("❌ WhatsApp logged out. Please delete 'auth' folder and restart to scan QR.");
       }
     }
 
