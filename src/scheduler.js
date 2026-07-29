@@ -46,7 +46,7 @@ async function cleanupExpiredUsers(db, getSock) {
         try {
 
           setTimeout(async () => {
-            if (sock) {
+            if (sock && row.remote_jid) {
               await sock.sendMessage(row.remote_jid, {
                 text:
                   `🧹 *Your Subscription Has Expired*\n\n` +

@@ -5,14 +5,11 @@ import makeWASocket, {
 
 import pino from "pino";
 import qrcode from "qrcode-terminal";
-import { HttpsProxyAgent } from "https-proxy-agent";
 
-export async function connectToWhatsApp(onMessage, onReconnect) {
+
+export async function connectToWhatsApp(onMessage, onReconnect, retryDelay = 5000) {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
 
-  // Optional: Set HTTP_PROXY in your .env file (e.g. HTTP_PROXY=http://user:pass@ip:port)
-  const proxyUrl = process.env.HTTP_PROXY || "";
-  const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
   const sock = makeWASocket({
     logger: pino({ level: "silent" }),
@@ -21,8 +18,7 @@ export async function connectToWhatsApp(onMessage, onReconnect) {
     syncFullHistory: false, // Memory Optimization: Do not download old chats
     markOnlineOnConnect: false, // Memory Optimization: Do not aggressively broadcast presence
     generateHighQualityLinkPreview: false,
-    agent: proxyAgent,
-    fetchAgent: proxyAgent,
+
     getMessage: async () => {
       // Memory Optimization: Prevents Baileys from locally caching messages for replies
       return { conversation: "hello" };
@@ -36,10 +32,10 @@ export async function connectToWhatsApp(onMessage, onReconnect) {
   const originalSendMessage = sock.sendMessage.bind(sock);
 
   sock.sendMessage = async (jid, content, options) => {
-    // If it's a direct text message, simulate human typingmakeWASocket
+    // If it's a direct text message, simulate human typing
     if (content && content.text) {
       try {
-        await sock.presenceSubscribe(jid);
+        // NOTE: presenceSubscribe removed — it generates excessive traffic to WhatsApp servers
         await sock.sendPresenceUpdate("composing", jid);
 
         // Calculate realistic delay: 500ms base + 30ms per character (capped at 3 seconds)
@@ -71,11 +67,16 @@ export async function connectToWhatsApp(onMessage, onReconnect) {
       const reason = lastDisconnect?.error?.message || "Unknown Error";
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
+      // Clean up all listeners on this dead socket to prevent event listener leaks
+      sock.ev.removeAllListeners();
+
       if (shouldReconnect) {
-        console.log(`⚠️ Connection closed (Code: ${statusCode}, Reason: ${reason}). Reconnecting in 5s...`);
+        // Exponential backoff: grows 5s → 10s → 20s → 40s, capped at 5 minutes
+        const nextDelay = Math.min(retryDelay * 2, 5 * 60 * 1000);
+        console.log(`⚠️ Connection closed (Code: ${statusCode}, Reason: ${reason}). Reconnecting in ${retryDelay / 1000}s...`);
         setTimeout(() => {
-          connectToWhatsApp(onMessage, onReconnect);
-        }, 5000);
+          connectToWhatsApp(onMessage, onReconnect, nextDelay);
+        }, retryDelay);
       } else {
         console.log("❌ WhatsApp logged out. Please delete 'auth' folder and restart to scan QR.");
       }
