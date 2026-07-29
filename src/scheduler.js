@@ -28,6 +28,7 @@ async function cleanupExpiredUsers(db, getSock) {
             WHERE s.status = 'active'
               AND s.expiry_time < NOW()
               AND u.hotspot_username IS NOT NULL
+            ORDER BY s.id
         `);
 
     const sock = getSock();
@@ -120,6 +121,7 @@ async function sendExpiryAlerts(db, getSock) {
                   WHERE sq.user_id = s.user_id
                   AND sq.status = 'queued'
               )
+            ORDER BY s.id
         `);
 
     const sock = getSock();
@@ -196,6 +198,7 @@ async function activateQueuedUsers(db, getSock) {
             LEFT JOIN whatsapp_sessions ws ON ws.phone = u.phone
             WHERE s.status = 'queued'
               AND s.start_time <= NOW()
+            ORDER BY s.id
         `);
 
     if (res.rows.length === 0) return;
