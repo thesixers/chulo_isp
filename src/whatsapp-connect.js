@@ -5,9 +5,14 @@ import makeWASocket, {
 
 import pino from "pino";
 import qrcode from "qrcode-terminal";
+import { HttpsProxyAgent } from "https-proxy-agent";
 
 export async function connectToWhatsApp(onMessage, onReconnect) {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
+
+  // Optional: Set HTTP_PROXY in your .env file (e.g. HTTP_PROXY=http://user:pass@ip:port)
+  const proxyUrl = process.env.HTTP_PROXY || "";
+  const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
   const sock = makeWASocket({
     logger: pino({ level: "silent" }),
@@ -16,10 +21,13 @@ export async function connectToWhatsApp(onMessage, onReconnect) {
     syncFullHistory: false, // Memory Optimization: Do not download old chats
     markOnlineOnConnect: false, // Memory Optimization: Do not aggressively broadcast presence
     generateHighQualityLinkPreview: false,
+    agent: proxyAgent,
+    fetchAgent: proxyAgent,
     getMessage: async () => {
       // Memory Optimization: Prevents Baileys from locally caching messages for replies
       return { conversation: "hello" };
     },
+    browser: ["Chrome", "Windows", "10.0"]
   });
 
   // ─────────────────────────────────────────────────────────
