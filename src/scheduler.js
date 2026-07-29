@@ -85,6 +85,7 @@ async function cleanupExpiredUsers(db, getSock) {
           [row.sub_id],
         );
       }
+    }
 
     if (res.rows.length > 0) {
       console.log(
