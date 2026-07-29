@@ -32,7 +32,7 @@ async function cleanupExpiredUsers(db, getSock) {
 
     const sock = getSock();
 
-    for (const row of res.rows) {
+    for (const [i, row] of res.rows.entries()) {
       // Check if user has a newly activated subscription (from queue)
       const activeCheck = await db.query(
         `
@@ -55,7 +55,7 @@ async function cleanupExpiredUsers(db, getSock) {
                   `Reply *1* to renew or *HI* for the main menu.`,
               });
             }
-          }, 1000);
+          }, 1000 + (i * 4000));
 
          setTimeout(async () => {
            // Fire-and-forget: errors are handled internally inside removeActiveSessions
@@ -125,7 +125,7 @@ async function sendExpiryAlerts(db, getSock) {
     const sock = getSock();
     if (!sock) return; // WhatsApp not connected yet
 
-    for (const sub of res.rows) {
+    for (const [i, sub] of res.rows.entries()) {
       const hoursLeft =
         (new Date(sub.expiry_time) - new Date()) / (1000 * 60 * 60);
       const daysLeft = hoursLeft / 24;
@@ -163,7 +163,7 @@ async function sendExpiryAlerts(db, getSock) {
         try {
           setTimeout(async () => {
             await sock.sendMessage(sub.remote_jid, { text: message });
-          }, 2000);
+          }, 2000 + (i * 4000));
           await db.query(
             `UPDATE subscriptions SET alert_sent = true WHERE id = $1`,
             [sub.id],
@@ -202,7 +202,7 @@ async function activateQueuedUsers(db, getSock) {
 
     const sock = getSock();
 
-    for (const row of res.rows) {
+    for (const [i, row] of res.rows.entries()) {
       if (!row.hotspot_username || !row.hotspot_password) continue;
 
       try {
@@ -237,7 +237,7 @@ async function activateQueuedUsers(db, getSock) {
                 `Your old plan has expired and your new *${row.plan_name}* plan is now running.\n` +
                 `Your MikroTik profile has been updated automatically! 🛰️`,
             });
-          }, 2000);
+          }, 2000 + (i * 4000));
         }
       } catch (err) {
         console.error(
