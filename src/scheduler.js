@@ -58,12 +58,16 @@ async function cleanupExpiredUsers(db, getSock) {
             }
           }, 1000 + (i * 4000));
 
-         setTimeout(async () => {
-           // Fire-and-forget: errors are handled internally inside removeActiveSessions
-           removeActiveSessions(row.hotspot_username);
-           await removeHotspotUser(row.hotspot_username);
-         }, 3000);
+          // Await Mikrotik removal synchronously so we don't accidentally update the DB if it fails
+          await removeActiveSessions(row.hotspot_username);
+          await removeHotspotUser(row.hotspot_username);
           removed++;
+
+          // Only mark as expired if MikroTik removal succeeded
+          await db.query(
+            `UPDATE subscriptions SET status = 'expired' WHERE id = $1`,
+            [row.sub_id],
+          );
         } catch (err) {
           console.error(
             `Scheduler: MikroTik removal failed for '${row.hotspot_username}':`,
@@ -75,13 +79,12 @@ async function cleanupExpiredUsers(db, getSock) {
         console.log(
           `🧹 Cleanup: Skipped removal for '${row.hotspot_username}' (they transitioned to a queued plan)`,
         );
+        // Mark the OLD subscription as expired since they have a new one
+        await db.query(
+          `UPDATE subscriptions SET status = 'expired' WHERE id = $1`,
+          [row.sub_id],
+        );
       }
-      // Mark as expired in DB regardless of MikroTik result
-      await db.query(
-        `UPDATE subscriptions SET status = 'expired' WHERE id = $1`,
-        [row.sub_id],
-      );
-    }
 
     if (res.rows.length > 0) {
       console.log(
