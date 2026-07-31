@@ -275,8 +275,14 @@ export function startScheduler(db, getSock) {
   // Job C: activate queued plans every 1 minute
   setInterval(() => activateQueuedUsers(db, getSock), 60 * 1000);
 
-  // Run immediately on startup too
-  cleanupExpiredUsers(db, getSock);
-  sendExpiryAlerts(db, getSock);
-  activateQueuedUsers(db, getSock);
+  // Run immediately on startup too, but sequentially to prevent DB deadlocks
+  (async () => {
+    try {
+      await cleanupExpiredUsers(db, getSock);
+      await sendExpiryAlerts(db, getSock);
+      await activateQueuedUsers(db, getSock);
+    } catch (err) {
+      console.error("Startup scheduler error:", err);
+    }
+  })();
 }

@@ -50,7 +50,16 @@ export async function connectToWhatsApp(onMessage, onReconnect, retryDelay = 500
         );
       }
     }
-    return originalSendMessage(jid, content, options);
+    try {
+      if (!sock.user) {
+        console.warn(`⚠️ Cannot send message to ${jid}: Socket user is not authenticated yet.`);
+        return undefined;
+      }
+      return await originalSendMessage(jid, content, options);
+    } catch (err) {
+      console.error(`⚠️ Failed to send message to ${jid}:`, err.message);
+      return undefined;
+    }
   };
 
   sock.ev.on("creds.update", saveCreds);
