@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chulo Speednet — Hotspot Checkout</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* Shared Accents */
+      --primary: #f97316; /* Orange */
+      --primary-hover: #ea580c;
+      --card-border-active: #f97316;
+      --accent: #10b981; /* Green */
+      --error: #ef4444;
+      --radius: 12px;
+
+      /* Light Theme Defaults (White Main) */
+      --bg-color: #f3f4f6; 
+      --card-bg: #ffffff;
+      --card-border: #e5e7eb;
+      --text: #111827;
+      --text-muted: #6b7280;
+      --input-bg: #ffffff;
+      --spinner-track: rgba(0, 0, 0, 0.1);
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+      --tab-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      --btn-outline-hover: var(--bg-color);
+    }
+
+    /* System Dark Mode Overrides (Black Main) */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-color: #000000; 
+        --card-bg: #121212;
+        --card-border: #27272a;
+        --text: #f9fafb;
+        --text-muted: #a1a1aa;
+        --input-bg: #000000;
+        --spinner-track: rgba(255, 255, 255, 0.1);
+        --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        --tab-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --btn-outline-hover: rgba(255, 255, 255, 0.05);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 460px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 32px 28px;
+      box-shadow: var(--shadow);
+      transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .logo-container {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .logo-title {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.3px;
+    }
+
+    .logo-subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-weight: 400;
+    }
+
+    /* Progress Steps */
+    .steps {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 32px;
+      position: relative;
+      padding: 0 16px;
+    }
+
+    .steps::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 32px;
+      right: 32px;
+      height: 1px;
+      background: var(--card-border);
+      transform: translateY(-50%);
+      z-index: 0;
+      transition: background 0.3s ease;
+    }
+
+    .step-dot {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--text-muted);
+      z-index: 1;
+      transition: all 0.2s ease;
+    }
+
+    .step-dot.active {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #ffffff;
+    }
+
+    .step-dot.complete {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #ffffff;
+    }
+
+    /* Step Panels */
+    .step-panel {
+      display: none;
+    }
+
+    .step-panel.active {
+      display: block;
+    }
+
+    h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      text-align: center;
+      color: var(--text);
+    }
+
+    /* Device Selector Grid */
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .select-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 16px 8px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .select-card:hover {
+      border-color: var(--primary);
+    }
+
+    .select-card.active {
+      border-color: var(--card-border-active);
+      background: rgba(249, 115, 22, 0.08); 
+    }
+
+    .select-card .val {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 2px;
+      color: var(--text);
+    }
+
+    .select-card .lbl {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 500;
+    }
+
+    /* Durations list */
+    .duration-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 24px;
+      max-height: 280px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .duration-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .duration-item:hover {
+      border-color: var(--primary);
+    }
+
+    .duration-item.active {
+      border-color: var(--card-border-active);
+      background: rgba(249, 115, 22, 0.08);
+    }
+
+    .duration-name {
+      font-weight: 500;
+      font-size: 14px;
+      color: var(--text);
+    }
+
+    .duration-price {
+      color: var(--text);
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      background: var(--bg-color);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 3px;
+      margin-bottom: 20px;
+      transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+
+    .tab-btn {
+      flex: 1;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn.active {
+      background: var(--card-bg);
+      color: var(--text);
+      box-shadow: var(--tab-shadow);
+    }
+
+    /* Form Fields */
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .form-group input {
+      width: 100%;
+      background: var(--input-bg);
+      border: 1px solid var(--card-border);
+      padding: 10px 14px;
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+      transition: background-color 0.3s ease, border-color 0.2s ease, color 0.3s ease;
+    }
+
+    .form-group input:focus {
+      border-color: var(--card-border-active);
+    }
+
+    .error-msg {
+      color: var(--error);
+      font-size: 13px;
+      margin-top: 12px;
+      text-align: center;
+      min-height: 18px;
+    }
+
+    /* Buttons */
+    .btn {
+      width: 100%;
+      background: var(--primary);
+      border: none;
+      color: #ffffff;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn:hover {
+      background: var(--primary-hover);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      margin-top: 10px;
+    }
+
+    .btn-outline:hover {
+      background: var(--btn-outline-hover);
+      border-color: var(--card-border);
+      color: var(--text);
+    }
+
+    /* Checkout Details screen */
+    .payment-card {
+      background: var(--bg-color);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+
+    .pay-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .pay-row:last-child {
+      border-bottom: none;
+    }
+
+    .pay-label {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .pay-val {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pay-val.copyable {
+      cursor: pointer;
+      color: var(--card-border-active);
+    }
+
+    .pay-val.copyable:hover {
+      text-decoration: underline;
+    }
+
+    /* Toast notification */
+    .copy-toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--text);
+      color: var(--bg-color); /* Inverts for contrast */
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      transition: transform 0.25s ease-out;
+      z-index: 10;
+    }
+
+    .copy-toast.show {
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* Status indicator */
+    .status-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin: 20px 0 10px 0;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--spinner-track);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Success state */
+    .success-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      margin: 0 auto 16px auto;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="logo-container">
+      <h1 class="logo-title">Chulo Speednet</h1>
+      <p class="logo-subtitle">Hotspot Web Self-Service Checkout</p>
+    </div>
+
+    <!-- Progress steps -->
+    <div class="steps">
+      <div class="step-dot active" id="dot-1">1</div>
+      <div class="step-dot" id="dot-2">2</div>
+      <div class="step-dot" id="dot-3">3</div>
+    </div>
+
+    <!-- STEP 1: Select Devices -->
+    <div class="step-panel active" id="panel-1">
+      <h2>Select Connected Devices</h2>
+      <div class="grid-3">
+        <div class="select-card active" onclick="selectDevices(1)" id="device-1">
+          <span class="val">1</span>
+          <span class="lbl">Device</span>
+        </div>
+        <div class="select-card" onclick="selectDevices(2)" id="device-2">
+          <span class="val">2</span>
+          <span class="lbl">Devices</span>
+        </div>
+        <div class="select-card" onclick="selectDevices(3)" id="device-3">
+          <span class="val">3</span>
+          <span class="lbl">Devices</span>
+        </div>
+      </div>
+      <button class="btn" onclick="nextStep(2)">Next: Choose Plan →</button>
+    </div>
+
+    <!-- STEP 2: Select Duration/Plan -->
+    <div class="step-panel" id="panel-2">
+      <h2>Choose Plan Duration</h2>
+      <div class="duration-list" id="plan-items-container">
+        <!-- Rendered dynamically -->
+      </div>
+      <button class="btn" id="to-step-3-btn" onclick="nextStep(3)" disabled>Next: Set Up Account →</button>
+      <button class="btn btn-outline" onclick="prevStep(1)">← Back</button>
+    </div>
+
+    <!-- STEP 3: Credentials -->
+    <div class="step-panel" id="panel-3">
+      <h2>Access Details</h2>
+      
+      <div class="tabs">
+        <button class="tab-btn active" id="tab-existing" onclick="switchTab('existing')">Existing User</button>
+        <button class="tab-btn" id="tab-new" onclick="switchTab('new')">New User</button>
+      </div>
+
+      <form id="checkout-form" onsubmit="submitForm(event)">
+        <!-- Existing user field -->
+        <div id="fields-existing">
+          <div class="form-group">
+            <label for="ext-username">Hotspot Username</label>
+            <input type="text" id="ext-username" placeholder="e.g. john" autocomplete="off">
+          </div>
+        </div>
+
+        <!-- New user fields -->
+        <div id="fields-new" style="display: none;">
+          <div class="form-group">
+            <label for="new-phone">WhatsApp / Phone Number</label>
+            <input type="text" id="new-phone" placeholder="e.g. 08012345678" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="new-username">Desired Hotspot Username</label>
+            <input type="text" id="new-username" placeholder="Letters & numbers only" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="new-password">Hotspot PIN (4 Digits)</label>
+            <input type="password" id="new-password" placeholder="e.g. 1234" maxlength="4" pattern="\d{4}" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="error-msg" id="form-error"></div>
+
+        <button type="submit" class="btn" id="submit-btn" style="margin-top: 15px;">Generate Payment Details ⚡</button>
+      </form>
+      <button class="btn btn-outline" onclick="prevStep(2)">← Back</button>
+    </div>
+
+    <!-- STEP 4: Payment Details -->
+    <div class="step-panel" id="panel-4">
+      <div class="payment-success-view" id="payment-pending-view">
+        <h2>Make Your Transfer</h2>
+        <p style="font-size: 13px; color: var(--text-muted); text-align: center; margin-bottom: 20px; line-height: 1.4;">
+          Transfer the exact amount below. Your hotspot profile is activated automatically upon payment confirmation.
+        </p>
+
+        <div class="payment-card">
+          <div class="pay-row">
+            <span class="pay-label">Amount</span>
+            <span class="pay-val" id="pay-amount" style="color: var(--primary); font-weight: 700; font-size: 16px;">₦0</span>
+          </div>
+          <div class="pay-row">
+            <span class="pay-label">Bank Name</span>
+            <span class="pay-val" id="pay-bank">Wema Bank</span>
+          </div>
+          <div class="pay-row">
+            <span class="pay-label">Account Number</span>
+            <span class="pay-val copyable" id="pay-account" onclick="copyText('pay-account')">0000000000 📋</span>
+          </div>
+          <div class="pay-row">
+            <span class="pay-label">Account Name</span>
+            <span class="pay-val" id="pay-narration">Chulo Speednet</span>
+          </div>
+        </div>
+
+        <div class="status-container">
+          <div class="spinner"></div>
+          <span>Waiting for bank transfer confirmation...</span>
+        </div>
+        
+        <button class="btn btn-outline" onclick="cancelPayment()" style="margin-top: 15px;">Cancel & Choose Different Plan</button>
+      </div>
+
+      <!-- Successful payment view -->
+      <div class="payment-success-view" id="payment-success-view" style="display: none; text-align: center; padding: 10px 0;">
+        <div class="success-icon">✓</div>
+        <h2>Payment Successful!</h2>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.4;">
+          Your plan has been activated. Connect to the Hotspot Wi-Fi, sign in with your credentials, and enjoy!
+        </p>
+        <div class="payment-card" style="text-align: left;">
+          <div class="pay-row">
+            <span class="pay-label">Username</span>
+            <span class="pay-val" id="success-user">-</span>
+          </div>
+          <div class="pay-row">
+            <span class="pay-label">PIN / Password</span>
+            <span class="pay-val" id="success-pin">****</span>
+          </div>
+        </div>
+        <button class="btn" onclick="window.location.href='http://10.5.50.1/login'">Log In to Internet 🚀</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Copied popup notification -->
+  <div class="copy-toast" id="copy-toast">Account number copied!</div>
+
+  <script>
+    // Edit this to your Server's API Host
+    const API_HOST = window.location.hostname === 'localhost' ? 'http://localhost:3003' : 'http://' + window.location.hostname + ':3003';
+
+    let currentStep = 1;
+    let selectedDeviceCount = 1;
+    let allPlans = [];
+    let selectedPlanId = null;
+    let currentTab = 'existing';
+    let checkInterval = null;
+
+    // Load plans on start
+    async function loadPlans() {
+      try {
+        const res = await fetch(`${API_HOST}/api/plans`);
+        if (!res.ok) throw new Error("Could not fetch plans");
+        allPlans = await res.json();
+        renderPlans();
+      } catch (err) {
+        document.getElementById('form-error').innerText = "Unable to connect to the Chulo server. Please check walled-garden connection.";
+      }
+    }
+
+    function renderPlans() {
+      const container = document.getElementById('plan-items-container');
+      container.innerHTML = '';
+      
+      const suffix = selectedDeviceCount === 1 ? '1Users' : selectedDeviceCount === 2 ? '2Users' : '3Users';
+      
+      const filtered = allPlans.filter(p => {
+        return p.id <= 5 && selectedDeviceCount === 1 ||
+               p.id >= 6 && p.id <= 10 && selectedDeviceCount === 2 ||
+               p.id >= 11 && selectedDeviceCount === 3;
+      });
+
+      filtered.forEach(p => {
+        const cleanName = p.name.split(' - ')[0];
+        
+        const item = document.createElement('div');
+        item.className = `duration-item ${selectedPlanId === p.id ? 'active' : ''}`;
+        item.onclick = () => selectPlan(p.id);
+        item.innerHTML = `
+          <span class="duration-name">${cleanName}</span>
+          <span class="duration-price">₦${p.price.toLocaleString()}</span>
+        `;
+        container.appendChild(item);
+      });
+    }
+
+    function selectDevices(count) {
+      selectedDeviceCount = count;
+      document.querySelectorAll('.select-card').forEach(el => el.classList.remove('active'));
+      document.getElementById(`device-${count}`).classList.add('active');
+      selectedPlanId = null;
+      document.getElementById('to-step-3-btn').disabled = true;
+      renderPlans();
+    }
+
+    function selectPlan(id) {
+      selectedPlanId = id;
+      document.querySelectorAll('.duration-item').forEach(el => el.classList.remove('active'));
+      renderPlans();
+      document.getElementById('to-step-3-btn').disabled = false;
+    }
+
+    function updateStepsIndicator(step) {
+      const dot1 = document.getElementById('dot-1');
+      const dot2 = document.getElementById('dot-2');
+      const dot3 = document.getElementById('dot-3');
+
+      if (!dot1 || !dot2 || !dot3) return;
+
+      dot1.className = 'step-dot';
+      dot2.className = 'step-dot';
+      dot3.className = 'step-dot';
+
+      if (step === 1 || step === 2) {
+        dot1.classList.add('active');
+      } else if (step === 3) {
+        dot1.classList.add('complete');
+        dot2.classList.add('active');
+      } else if (step === 4) {
+        dot1.classList.add('complete');
+        dot2.classList.add('complete');
+        dot3.classList.add('active');
+      }
+    }
+
+    function nextStep(step) {
+      document.getElementById(`panel-${currentStep}`).classList.remove('active');
+      document.getElementById(`panel-${step}`).classList.add('active');
+      currentStep = step;
+      updateStepsIndicator(step);
+    }
+
+    function prevStep(step) {
+      document.getElementById(`panel-${currentStep}`).classList.remove('active');
+      document.getElementById(`panel-${step}`).classList.add('active');
+      currentStep = step;
+      updateStepsIndicator(step);
+    }
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.getElementById('tab-existing').classList.toggle('active', tab === 'existing');
+      document.getElementById('tab-new').classList.toggle('active', tab === 'new');
+      
+      document.getElementById('fields-existing').style.display = tab === 'existing' ? 'block' : 'none';
+      document.getElementById('fields-new').style.display = tab === 'new' ? 'block' : 'none';
+      
+      document.getElementById('form-error').innerText = '';
+    }
+
+    async function submitForm(e) {
+      e.preventDefault();
+      const errorDiv = document.getElementById('form-error');
+      const submitBtn = document.getElementById('submit-btn');
+      errorDiv.innerText = '';
+      
+      let payload = { planId: selectedPlanId };
+      let endpoint = '';
+      
+      if (currentTab === 'new') {
+        const phone = document.getElementById('new-phone').value.trim();
+        const username = document.getElementById('new-username').value.trim();
+        const password = document.getElementById('new-password').value.trim();
+        
+        if (!phone || !username || !password) {
+          errorDiv.innerText = "Please fill in all fields.";
+          return;
+        }
+        
+        payload.phone = phone;
+        payload.username = username;
+        payload.password = password;
+        endpoint = '/api/checkout/new';
+      } else {
+        const username = document.getElementById('ext-username').value.trim();
+        if (!username) {
+          errorDiv.innerText = "Please enter your username.";
+          return;
+        }
+        payload.username = username;
+        endpoint = '/api/checkout/existing';
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = "Generating Account... Please wait";
+
+      try {
+        const res = await fetch(`${API_HOST}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Checkout failed");
+
+        document.getElementById('pay-amount').innerText = `₦${data.amount.toLocaleString()}`;
+        document.getElementById('pay-bank').innerText = data.bank_name;
+        document.getElementById('pay-account').innerHTML = `${data.account_number} <span style="font-size:12px; opacity:0.7;">📋</span>`;
+        document.getElementById('pay-narration').innerText = data.narration;
+        
+        document.getElementById('pay-account').dataset.copy = data.account_number;
+
+        document.getElementById('success-user').innerText = payload.username;
+        document.getElementById('success-pin').innerText = currentTab === 'new' ? payload.password : '*(Use your existing Hotspot PIN)*';
+
+        nextStep(4);
+        startPolling(data.txRef);
+
+      } catch (err) {
+        errorDiv.innerText = err.message;
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerText = "Generate Payment Details ⚡";
+      }
+    }
+
+    function copyText(id) {
+      const el = document.getElementById(id);
+      const text = el.dataset.copy;
+      
+      navigator.clipboard.writeText(text).then(() => {
+        const toast = document.getElementById('copy-toast');
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 2000);
+      });
+    }
+
+    function cancelPayment() {
+      if (checkInterval) {
+        clearInterval(checkInterval);
+        checkInterval = null;
+      }
+      prevStep(1);
+      selectedPlanId = null;
+      document.getElementById('to-step-3-btn').disabled = true;
+      renderPlans();
+    }
+
+    function startPolling(txRef) {
+      if (checkInterval) clearInterval(checkInterval);
+      
+      checkInterval = setInterval(async () => {
+        try {
+          const res = await fetch(`${API_HOST}/api/checkout/status/${txRef}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          
+          if (data.status === 'completed') {
+            clearInterval(checkInterval);
+            document.getElementById('payment-pending-view').style.display = 'none';
+            document.getElementById('payment-success-view').style.display = 'block';
+            document.getElementById('dot-3').classList.add('complete');
+          }
+        } catch (err) {
+          console.error("Polling error:", err);
+        }
+      }, 4000);
+    }
+
+    // Initialize
+    loadPlans();
+  </script>
+</body>
+</html>
