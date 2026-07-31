@@ -67,6 +67,13 @@ async function getSession(db, phone) {
 }
 
 async function updateSession(db, phone, state, planId = null, platform = null, remoteId = null, giftTargetUserId = null, pendingUsername = undefined, pendingPassword = undefined) {
+  // Self-healing check for mixed-up legacy argument positions (e.g. platform vs remoteId)
+  if (platform && platform !== "whatsapp" && platform !== "telegram") {
+    const temp = platform;
+    platform = remoteId;
+    remoteId = temp;
+  }
+
   const isWhatsapp = platform === "whatsapp";
   const isTelegram = platform === "telegram";
   await db.query(
@@ -175,7 +182,7 @@ function buildWelcomeMessage(name = "there") {
     `6️⃣  💳 Payment History\n` +
     `7️⃣  📞 Contact Support\n\n` +
     `Reply with a number (1–7).\n\n` +
-    `✈️ Prefer Telegram? Chat with us at https://t.me/chulo\\_speednet\\_bot`
+    `✈️ Prefer Telegram? Chat with us at https://t.me/chulo_speednet_bot`
   );
 }
 
@@ -193,7 +200,7 @@ function buildAdminWelcomeMessage(name = "Admin") {
     `*🛠️ Admin Commands:*\n` +
     `Type *!help* to see all admin commands.\n\n` +
     `Reply with a number (1–7) or an admin command.\n\n` +
-    `✈️ Prefer Telegram? Chat with us at https://t.me/chulo\\_speednet\\_bot`
+    `✈️ Prefer Telegram? Chat with us at https://t.me/chulo_speednet_bot`
   );
 }
 

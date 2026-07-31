@@ -37,8 +37,12 @@ async function sendViaWhatsApp(jid, text) {
 // Internal function to send specifically to Telegram
 async function sendViaTelegram(chatId, text) {
   if (!tgBot) throw new Error("Telegram bot not initialized");
+  
+  // Escape underscores in URLs specifically to avoid breaking Telegram's Markdown parser
+  const formattedText = text.replace(/(https?:\/\/[^\s]+)/g, (url) => url.replace(/_/g, '\\_'));
+  
   try {
-    return await tgBot.telegram.sendMessage(chatId, text, { parse_mode: "Markdown" });
+    return await tgBot.telegram.sendMessage(chatId, formattedText, { parse_mode: "Markdown" });
   } catch (err) {
     // Fallback to plain text if Markdown parsing fails (e.g. unescaped special chars)
     if (err.message?.includes("can't parse entities")) {
