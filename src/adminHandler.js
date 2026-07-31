@@ -11,9 +11,9 @@
  *   !subscriptions [page|username] — paginated subscriptions (all or by user)
  *   !broadcast <msg>             — send a message to all active subscribers
  */
-
 import { provisionOrQueue } from "./fulfillPayment.js";
 import { isValidPassword, isValidUsername, sanitizeUsername } from "./handleMessage.js";
+import { sendMessage } from "./messaging.js";
 
 const adminSessions = new Map();
 const PAGE_SIZE = 5;
@@ -26,7 +26,7 @@ function fmt(date) {
   });
 }
 
-export async function handleAdminMessage(sock, from, text, db) {
+export async function handleAdminMessage(platform, remoteId, from, text, db) {
   const raw = text.trim();
   const parts = raw.split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -34,14 +34,12 @@ export async function handleAdminMessage(sock, from, text, db) {
   // ── Check for active admin session (e.g. multi-step !activate) ─────────
   const session = adminSessions.get(from);
   if (session && !cmd.startsWith("!")) {
-    return handleAdminSession(sock, from, raw, db, session);
+    return handleAdminSession(from, raw, db, session);
   }
 
   // ── Admin help menu ────────────────────────────────────────────────────
   if (cmd === "!help" || cmd === "!admin") {
-    await sock.sendMessage(from, {
-      text:
-        `🛠️ *Admin Panel — Chulo Speednet*\n\n` +
+    await sendMessage(from, `🛠️ *Admin Panel — Chulo Speednet*\n\n` +
         `*Available Commands:*\n\n` +
         `📊 !stats\n` +
         `   Overview: users, subs, revenue\n\n` +
@@ -61,9 +59,10 @@ export async function handleAdminMessage(sock, from, text, db) {
         `   Delete a subscription for a user (active or queued)\n\n` +
         `📢 !broadcast <message>\n` +
         `   Send message to all active subscribers\n\n` +
+        `📅 !daily [today | yesterday | DD/MM/YYYY]\n` +
+        `   Subscribers on a specific day (default: today)\n\n` +
         `➕ !addplan\n` +
-        `   Add a new data plan`,
-    });
+        `   Add a new data plan`,);
     return true;
   }
 
@@ -89,15 +88,12 @@ export async function handleAdminMessage(sock, from, text, db) {
       ),
     ]);
 
-    await sock.sendMessage(from, {
-      text:
-        `📊 *Chulo Speednet Stats*\n\n` +
+    await sendMessage(from, `📊 *Chulo Speednet Stats*\n\n` +
         `👥 Total Users: *${totalUsersRes.rows[0].count}*\n` +
         `✅ Active Subscribers: *${activeSubsRes.rows[0].count}*\n` +
         `⏳ Pending Subscriptions: *${queuedSubsRes.rows[0].count}*\n` +
         `💰 Total Revenue: *₦${Number(revenueRes.rows[0].total).toLocaleString()}*\n` +
-        `⚙️ Pending Provisions: *${pendingProvRes.rows[0].count}*`,
-    });
+        `⚙️ Pending Provisions: *${pendingProvRes.rows[0].count}*`,);
     return true;
   }
 
@@ -130,7 +126,7 @@ export async function handleAdminMessage(sock, from, text, db) {
     const totalPages = Math.ceil(Number(total.rows[0].count) / PAGE_SIZE);
 
     if (!res.rows.length) {
-      await sock.sendMessage(from, { text: `No users found on page ${page}.` });
+      await sendMessage(from, `No users found on page ${page}.`);
       return true;
     }
 
@@ -150,12 +146,9 @@ export async function handleAdminMessage(sock, from, text, db) {
       })
       .join("\n\n");
 
-    await sock.sendMessage(from, {
-      text:
-        `👥 *Users — Page ${page}/${totalPages}*\n\n` +
+    await sendMessage(from, `👥 *Users — Page ${page}/${totalPages}*\n\n` +
         `${lines}\n\n` +
-        `${page < totalPages ? `Type *!users ${page + 1}* for next page.` : "Last page."}`,
-    });
+        `${page < totalPages ? `Type *!users ${page + 1}* for next page.` : "Last page."}`,);
     return true;
   }
 
@@ -179,9 +172,7 @@ export async function handleAdminMessage(sock, from, text, db) {
         [username],
       );
       if (!userRes.rows.length) {
-        await sock.sendMessage(from, {
-          text: `❌ No user found with username *${username}*.`,
-        });
+        await sendMessage(from, `❌ No user found with username *${username}*.`,);
         return true;
       }
       const targetId = userRes.rows[0].id;
@@ -211,9 +202,7 @@ export async function handleAdminMessage(sock, from, text, db) {
 
       const totalPages = Math.ceil(Number(totalRes.rows[0].count) / PAGE_SIZE);
       if (!res.rows.length) {
-        await sock.sendMessage(from, {
-          text: `No payments found for *${username}* on page ${page}.`,
-        });
+        await sendMessage(from, `No payments found for *${username}* on page ${page}.`,);
         return true;
       }
       const lines = res.rows
@@ -232,12 +221,9 @@ export async function handleAdminMessage(sock, from, text, db) {
         })
         .join("\n\n");
 
-      await sock.sendMessage(from, {
-        text:
-          `💳 *Payments for ${targetName} (${username})* — Page ${page}/${totalPages}\n\n` +
+      await sendMessage(from, `💳 *Payments for ${targetName} (${username})* — Page ${page}/${totalPages}\n\n` +
           `${lines}\n\n` +
-          `${page < totalPages ? `Type *!payments ${username} ${page + 1}* for next page.` : "Last page."}`,
-      });
+          `${page < totalPages ? `Type *!payments ${username} ${page + 1}* for next page.` : "Last page."}`,);
     } else {
       // Global paginated list
       [res, totalRes] = await Promise.all([
@@ -257,9 +243,7 @@ export async function handleAdminMessage(sock, from, text, db) {
 
       const totalPages = Math.ceil(Number(totalRes.rows[0].count) / PAGE_SIZE);
       if (!res.rows.length) {
-        await sock.sendMessage(from, {
-          text: `No payments found on page ${page}.`,
-        });
+        await sendMessage(from, `No payments found on page ${page}.`,);
         return true;
       }
       const lines = res.rows
@@ -278,12 +262,9 @@ export async function handleAdminMessage(sock, from, text, db) {
         })
         .join("\n\n");
 
-      await sock.sendMessage(from, {
-        text:
-          `💳 *Payments — Page ${page}/${totalPages}*\n\n` +
+      await sendMessage(from, `💳 *Payments — Page ${page}/${totalPages}*\n\n` +
           `${lines}\n\n` +
-          `${page < totalPages ? `Type *!payments ${page + 1}* for next page.` : "Last page."}`,
-      });
+          `${page < totalPages ? `Type *!payments ${page + 1}* for next page.` : "Last page."}`,);
     }
     return true;
   }
@@ -292,9 +273,7 @@ export async function handleAdminMessage(sock, from, text, db) {
   if (cmd === "!user") {
     const lookupUsername = parts[1];
     if (!lookupUsername) {
-      await sock.sendMessage(from, {
-        text: `Usage: *!user <username>*  e.g. !user john2024`,
-      });
+      await sendMessage(from, `Usage: *!user <username>*  e.g. !user john2024`,);
       return true;
     }
 
@@ -304,9 +283,7 @@ export async function handleAdminMessage(sock, from, text, db) {
       [lookupUsername],
     );
     if (!userRes.rows.length) {
-      await sock.sendMessage(from, {
-        text: `❌ No user found with username *${lookupUsername}*.`,
-      });
+      await sendMessage(from, `❌ No user found with username *${lookupUsername}*.`,);
       return true;
     }
     const u = userRes.rows[0];
@@ -360,9 +337,7 @@ export async function handleAdminMessage(sock, from, text, db) {
       ? `\n\n💳 *Last Payment:* ₦${Number(lastPayment.amount).toLocaleString()} · ${fmt(lastPayment.paid_at || lastPayment.created_at)} (${lastPayment.status})`
       : "";
 
-    await sock.sendMessage(from, {
-      text:
-        `🔍 *User Details*\n\n` +
+    await sendMessage(from, `🔍 *User Details*\n\n` +
         `👤 Name: *${u.name || "Unknown"}*\n` +
         `📞 Phone: *${u.phone}*\n` +
         `🌐 Username: *${u.hotspot_username || "Not set"}*\n` +
@@ -370,8 +345,7 @@ export async function handleAdminMessage(sock, from, text, db) {
         `📊 Status: *${u.status}*\n\n` +
         `${activeBlock}` +
         `${queuedBlock}` +
-        `${payBlock}`,
-    });
+        `${payBlock}`,);
     return true;
   }
 
@@ -402,9 +376,7 @@ export async function handleAdminMessage(sock, from, text, db) {
         [username],
       );
       if (!userRes.rows.length) {
-        await sock.sendMessage(from, {
-          text: `❌ No user found with username *${username}*.`,
-        });
+        await sendMessage(from, `❌ No user found with username *${username}*.`,);
         return true;
       }
       const targetId = userRes.rows[0].id;
@@ -428,9 +400,7 @@ export async function handleAdminMessage(sock, from, text, db) {
 
       const totalPages = Math.ceil(Number(totalRes.rows[0].count) / PAGE_SIZE);
       if (!res.rows.length) {
-        await sock.sendMessage(from, {
-          text: `No subscriptions found for *${username}* on page ${page}.`,
-        });
+        await sendMessage(from, `No subscriptions found for *${username}* on page ${page}.`,);
         return true;
       }
       const lines = res.rows
@@ -441,12 +411,9 @@ export async function handleAdminMessage(sock, from, text, db) {
         )
         .join("\n\n");
 
-      await sock.sendMessage(from, {
-        text:
-          `📋 *Subscriptions for ${targetName} (${username})* — Page ${page}/${totalPages}\n\n` +
+      await sendMessage(from, `📋 *Subscriptions for ${targetName} (${username})* — Page ${page}/${totalPages}\n\n` +
           `${lines}\n\n` +
-          `${page < totalPages ? `Type *!subscriptions ${username} ${page + 1}* for next page.` : "Last page."}`,
-      });
+          `${page < totalPages ? `Type *!subscriptions ${username} ${page + 1}* for next page.` : "Last page."}`,);
     } else {
       [res, totalRes] = await Promise.all([
         db.query(
@@ -466,9 +433,7 @@ export async function handleAdminMessage(sock, from, text, db) {
 
       const totalPages = Math.ceil(Number(totalRes.rows[0].count) / PAGE_SIZE);
       if (!res.rows.length) {
-        await sock.sendMessage(from, {
-          text: `No subscriptions found on page ${page}.`,
-        });
+        await sendMessage(from, `No subscriptions found on page ${page}.`,);
         return true;
       }
       const lines = res.rows
@@ -480,12 +445,9 @@ export async function handleAdminMessage(sock, from, text, db) {
         )
         .join("\n\n");
 
-      await sock.sendMessage(from, {
-        text:
-          `📋 *Subscriptions — Page ${page}/${totalPages}*\n\n` +
+      await sendMessage(from, `📋 *Subscriptions — Page ${page}/${totalPages}*\n\n` +
           `${lines}\n\n` +
-          `${page < totalPages ? `Type *!subscriptions ${page + 1}* for next page.` : "Last page."}`,
-      });
+          `${page < totalPages ? `Type *!subscriptions ${page + 1}* for next page.` : "Last page."}`,);
     }
     return true;
   }
@@ -503,7 +465,7 @@ export async function handleAdminMessage(sock, from, text, db) {
     );
 
     if (revenue.rows.length === 0) {
-      await sock.sendMessage(from, { text: "No revenue data found." });
+      await sendMessage(from, "No revenue data found.");
       return true;
     }
 
@@ -511,9 +473,105 @@ export async function handleAdminMessage(sock, from, text, db) {
       .map((row) => `📅 ${row.month} — 💰 ₦${Number(row.total).toLocaleString()}`)
       .join("\n");
 
-    await sock.sendMessage(from, {
-      text: `💰 *Revenue Data:*\n\n${lines}`,
-    });
+    await sendMessage(from, `💰 *Revenue Data:*\n\n${lines}`,);
+    return true;
+  }
+
+  // ── Daily subscribers report ───────────────────────────────────────────
+  if (cmd === "!daily") {
+    const arg = (parts[1] || "today").toLowerCase();
+
+    // Parse the date argument into a YYYY-MM-DD string (Nigeria WAT = UTC+1)
+    function toWATDateString(date) {
+      // Shift to WAT (UTC+1) then format as YYYY-MM-DD
+      const wat = new Date(date.getTime() + 60 * 60 * 1000);
+      return wat.toISOString().slice(0, 10);
+    }
+
+    let targetDate;
+    if (arg === "today") {
+      targetDate = toWATDateString(new Date());
+    } else if (arg === "yesterday") {
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      targetDate = toWATDateString(y);
+    } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(arg)) {
+      // DD/MM/YYYY → YYYY-MM-DD
+      const [dd, mm, yyyy] = arg.split("/");
+      targetDate = `${yyyy}-${mm}-${dd}`;
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
+      targetDate = arg;
+    } else {
+      await sendMessage(from,
+        `❌ Invalid date format.\n\nUsage:\n` +
+        `• *!daily* — today\n` +
+        `• *!daily yesterday*\n` +
+        `• *!daily 31/07/2025*  (DD/MM/YYYY)\n` +
+        `• *!daily 2025-07-31*  (YYYY-MM-DD)`
+      );
+      return true;
+    }
+
+    // Validate date is real
+    if (isNaN(Date.parse(targetDate))) {
+      await sendMessage(from, `❌ *${arg}* is not a valid date.`);
+      return true;
+    }
+
+    const dailyRes = await db.query(`
+      SELECT
+        u.name,
+        u.phone,
+        u.hotspot_username,
+        p.name          AS plan_name,
+        s.status,
+        s.start_time,
+        s.expiry_time,
+        s.created_at,
+        COALESCE(pay.amount, p.price) AS amount,
+        COALESCE(pay.method, 'cash')  AS method
+      FROM subscriptions s
+      JOIN users u  ON u.id  = s.user_id
+      JOIN plans p  ON p.id  = s.plan_id
+      LEFT JOIN payments pay
+             ON pay.user_id = s.user_id
+            AND DATE((pay.paid_at  AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Lagos') = $1::date
+      WHERE DATE((s.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Lagos') = $1::date
+      ORDER BY s.created_at DESC
+    `, [targetDate]);
+
+    if (dailyRes.rows.length === 0) {
+      // Pretty-print the date for the reply
+      const display = new Date(targetDate + 'T12:00:00Z').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+      await sendMessage(from, `📅 No subscribers found for *${display}*.`);
+      return true;
+    }
+
+    const statusIcon = (s) => s === 'active' ? '✅' : s === 'queued' ? '⏳' : '❌';
+    const display = new Date(targetDate + 'T12:00:00Z').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+
+    const lines = dailyRes.rows.map((r, i) => {
+      const name = r.name || r.hotspot_username || 'Unknown';
+      const username = r.hotspot_username ? `\`${r.hotspot_username}\`` : '_not set_';
+      const amount = `₦${Number(r.amount).toLocaleString()}`;
+      const method = r.method === 'transfer' ? '🏦 transfer' : '💵 cash';
+      const start  = fmt(r.start_time);
+      const expiry = fmt(r.expiry_time);
+      const status = statusIcon(r.status);
+      return (
+        `*${i + 1}.* 👤 ${name}  (${username})\n` +
+        `   📞 +${r.phone}\n` +
+        `   📡 ${r.plan_name}\n` +
+        `   💳 ${amount}  (${method})\n` +
+        `   📅 ${start} → ${expiry}  ${status}`
+      );
+    }).join('\n\n');
+
+    await sendMessage(from,
+      `📅 *Subscribers on ${display}*\n\n` +
+      `${lines}\n\n` +
+      `Total: *${dailyRes.rows.length} subscription${dailyRes.rows.length !== 1 ? 's' : ''}*`
+    );
     return true;
   }
 
@@ -521,23 +579,21 @@ export async function handleAdminMessage(sock, from, text, db) {
   if (cmd === "!broadcast") {
     const broadcastMsg = parts.slice(1).join(" ");
     if (!broadcastMsg) {
-      await sock.sendMessage(from, { text: `Usage: *!broadcast <message>*` });
+      await sendMessage(from, `Usage: *!broadcast <message>*`);
       return true;
     }
 
     const subs = await db.query(`
-            SELECT DISTINCT ws.remote_jid
-            FROM whatsapp_sessions ws
+            SELECT DISTINCT u.phone
+            FROM chat_sessions ws
             JOIN users u ON u.phone = ws.phone
             JOIN subscriptions s ON s.user_id = u.id
             WHERE s.status = 'active' AND s.expiry_time > NOW()
-              AND ws.remote_jid IS NOT NULL
+              AND (ws.remote_jid IS NOT NULL OR ws.telegram_chat_id IS NOT NULL)
         `);
 
     if (!subs.rows.length) {
-      await sock.sendMessage(from, {
-        text: `No active subscribers with known JIDs.`,
-      });
+      await sendMessage(from, `No active subscribers found.`);
       return true;
     }
 
@@ -545,9 +601,7 @@ export async function handleAdminMessage(sock, from, text, db) {
       failed = 0;
     for (const row of subs.rows) {
       try {
-        await sock.sendMessage(row.remote_jid, {
-          text: `📢 *Chulo Speednet*\n\n${broadcastMsg}`,
-        });
+        await sendMessage(row.phone, `📢 *Chulo Speednet*\n\n${broadcastMsg}`);
         sent++;
         // Small delay to avoid rate limits
         await new Promise((r) => setTimeout(r, 500));
@@ -556,9 +610,7 @@ export async function handleAdminMessage(sock, from, text, db) {
       }
     }
 
-    await sock.sendMessage(from, {
-      text: `📢 Broadcast complete.\n✅ Sent: ${sent}\n❌ Failed: ${failed}`,
-    });
+    await sendMessage(from, `📢 Broadcast complete.\n✅ Sent: ${sent}\n❌ Failed: ${failed}`,);
     return true;
   }
 
@@ -566,7 +618,7 @@ export async function handleAdminMessage(sock, from, text, db) {
   if (cmd === "!activate") {
     const targetUsername = parts[1];
     if (!targetUsername) {
-      await sock.sendMessage(from, { text: `Usage: *!activate <username>*` });
+      await sendMessage(from, `Usage: *!activate <username>*`);
       return true;
     }
 
@@ -576,9 +628,7 @@ export async function handleAdminMessage(sock, from, text, db) {
     );
 
     if (!targetRes.rows.length) {
-      await sock.sendMessage(from, {
-        text: `❌ User *${targetUsername}* not found.`,
-      });
+      await sendMessage(from, `❌ User *${targetUsername}* not found.`,);
       return true;
     }
 
@@ -587,15 +637,12 @@ export async function handleAdminMessage(sock, from, text, db) {
       targetUser: targetRes.rows[0],
     });
 
-    await sock.sendMessage(from, {
-      text:
-        `✅ Activating for *${targetRes.rows[0].hotspot_username}*\n\n` +
+    await sendMessage(from, `✅ Activating for *${targetRes.rows[0].hotspot_username}*\n\n` +
         `*Select Device Limit:*\n` +
         `1️⃣ Single Device\n` +
         `2️⃣ Two Devices\n` +
         `3️⃣ Three Devices\n\n` +
-        `Reply with a number (1-3) or type !cancel.`,
-    });
+        `Reply with a number (1-3) or type !cancel.`,);
     return true;
   }
 
@@ -603,9 +650,7 @@ export async function handleAdminMessage(sock, from, text, db) {
   if (cmd === "!delsub") {
     const targetUsername = parts[1];
     if (!targetUsername) {
-      await sock.sendMessage(from, {
-        text: `Usage: *!delsub <username>*  e.g. !delsub emeka`,
-      });
+      await sendMessage(from, `Usage: *!delsub <username>*  e.g. !delsub emeka`,);
       return true;
     }
 
@@ -614,9 +659,7 @@ export async function handleAdminMessage(sock, from, text, db) {
       [targetUsername],
     );
     if (!targetRes.rows.length) {
-      await sock.sendMessage(from, {
-        text: `❌ No user found with username *${targetUsername}*.`,
-      });
+      await sendMessage(from, `❌ No user found with username *${targetUsername}*.`,);
       return true;
     }
     const targetUser = targetRes.rows[0];
@@ -634,9 +677,7 @@ export async function handleAdminMessage(sock, from, text, db) {
     );
 
     if (!subsRes.rows.length) {
-      await sock.sendMessage(from, {
-        text: `ℹ️ *${targetUser.hotspot_username}* has no active or queued subscriptions.`,
-      });
+      await sendMessage(from, `ℹ️ *${targetUser.hotspot_username}* has no active or queued subscriptions.`,);
       return true;
     }
 
@@ -655,12 +696,9 @@ export async function handleAdminMessage(sock, from, text, db) {
       subs: subsRes.rows,
     });
 
-    await sock.sendMessage(from, {
-      text:
-        `🗑️ *Delete Subscription for ${targetUser.hotspot_username}*\n\n` +
+    await sendMessage(from, `🗑️ *Delete Subscription for ${targetUser.hotspot_username}*\n\n` +
         `${lines}\n\n` +
-        `Reply with the *number* of the plan to delete, or type *!cancel*.`,
-    });
+        `Reply with the *number* of the plan to delete, or type *!cancel*.`,);
     return true;
   }
 
@@ -675,9 +713,7 @@ export async function handleAdminMessage(sock, from, text, db) {
 
     // Nigerian numbers: country code 234 + 10 digits = 13 digits total
     if (!rawPhone || phoneCheck.length !== 13) {
-      await sock.sendMessage(from, {
-        text: `❌ Invalid phone number.\nUsage: *!newuser <phone>*\nExample: !newuser 08012345678 or !newuser 2348012345678`,
-      });
+      await sendMessage(from, `❌ Invalid phone number.\nUsage: *!newuser <phone>*\nExample: !newuser 08012345678 or !newuser 2348012345678`,);
       return true;
     }
 
@@ -698,14 +734,11 @@ export async function handleAdminMessage(sock, from, text, db) {
       const u = existingRes.rows[0];
       if (u.hotspot_username) {
         // Case 1 — already fully set up
-        await sock.sendMessage(from, {
-          text:
-            `ℹ️ *User already exists!*\n\n` +
+        await sendMessage(from, `ℹ️ *User already exists!*\n\n` +
             `👤 Name: *${u.name || "Unknown"}*\n` +
             `📞 Phone: *${u.phone}*\n` +
             `🌐 Username: *${u.hotspot_username}*\n\n` +
-            `Use *!activate ${u.hotspot_username}* to give them a plan instead.`,
-        });
+            `Use *!activate ${u.hotspot_username}* to give them a plan instead.`,);
         return true;
       }
 
@@ -719,16 +752,13 @@ export async function handleAdminMessage(sock, from, text, db) {
           existingUserId: u.id,
           name: u.name,
         });
-        await sock.sendMessage(from, {
-          text:
-            `🔄 *Resume Customer Setup*\n\n` +
+        await sendMessage(from, `🔄 *Resume Customer Setup*\n\n` +
             `📞 Phone: *+${phone}* (found in system — no plan yet)\n\n` +
             `*Select Device Limit for ${u.name}:*\n` +
             `1️⃣ Single Device\n` +
             `2️⃣ Two Devices\n` +
             `3️⃣ Three Devices\n\n` +
-            `Reply with *1*, *2*, or *3*, or type *!cancel*.`,
-        });
+            `Reply with *1*, *2*, or *3*, or type *!cancel*.`,);
       } else {
         // Name unknown — ask for it first (same as new user flow)
         adminSessions.set(from, {
@@ -736,59 +766,48 @@ export async function handleAdminMessage(sock, from, text, db) {
           phone,
           existingUserId: u.id,
         });
-        await sock.sendMessage(from, {
-          text:
-            `🔄 *Resume Customer Setup*\n\n` +
+        await sendMessage(from, `🔄 *Resume Customer Setup*\n\n` +
             `📞 Phone: *+${phone}* (found in system — no plan yet)\n\n` +
             `What is the customer's *name*?\n` +
-            `(Reply with their name or type *!cancel*)`,
-        });
+            `(Reply with their name or type *!cancel*)`,);
       }
       return true;
     }
 
     // Case 3 — completely new user
     adminSessions.set(from, { step: "newuser_name", phone });
-    await sock.sendMessage(from, {
-      text:
-        `🆕 *New Customer Setup*\n\n` +
+    await sendMessage(from, `🆕 *New Customer Setup*\n\n` +
         `📞 Phone: *+${phone}*\n\n` +
         `What is the customer's *name*?\n` +
-        `(Reply with their name or type *!cancel*)`,
-    });
+        `(Reply with their name or type *!cancel*)`,);
     return true;
   }
 
   // ── Add a new plan ────────────────────────────────────────────────────
   if (cmd === "!addplan") {
     adminSessions.set(from, { step: "addplan_device" });
-    await sock.sendMessage(from, {
-      text:
-        `➕ *Add New Plan*\n\n` +
+    await sendMessage(from, `➕ *Add New Plan*\n\n` +
         `*Select device limit:*\n` +
         `1️⃣ Single Device\n` +
         `2️⃣ Two Devices\n` +
         `3️⃣ Three Devices\n\n` +
-        `Reply with *1*, *2*, or *3*, or type *!cancel*.`,
-    });
+        `Reply with *1*, *2*, or *3*, or type *!cancel*.`,);
     return true;
   }
 
   if (cmd === "!cancel") {
     if (adminSessions.has(from)) {
       adminSessions.delete(from);
-      await sock.sendMessage(from, { text: `✅ Action cancelled.` });
+      await sendMessage(from, `✅ Action cancelled.`);
     } else {
-      await sock.sendMessage(from, { text: `No active action to cancel.` });
+      await sendMessage(from, `No active action to cancel.`);
     }
     return true;
   }
 
   // Not an admin command (starts with ! but unrecognised)
   if (cmd.startsWith("!")) {
-    await sock.sendMessage(from, {
-      text: `Unknown command. Type *!help* to see all admin commands.`,
-    });
+    await sendMessage(from, `Unknown command. Type *!help* to see all admin commands.`,);
     return true;
   }
 
@@ -797,7 +816,7 @@ export async function handleAdminMessage(sock, from, text, db) {
 }
 
 // ── Multi-step session handler for Admin commands ──────────────────────────
-async function handleAdminSession(sock, from, text, db, session) {
+async function handleAdminSession(from, text, db, session) {
   const { step, targetUser } = session;
 
   if (step === "awaiting_device_selection") {
@@ -808,9 +827,7 @@ async function handleAdminSession(sock, from, text, db, session) {
     };
     const choice = profileMap[text];
     if (!choice) {
-      await sock.sendMessage(from, {
-        text: `Please reply with 1, 2, or 3. (Or type !cancel)`,
-      });
+      await sendMessage(from, `Please reply with 1, 2, or 3. (Or type !cancel)`,);
       return true;
     }
 
@@ -832,9 +849,7 @@ async function handleAdminSession(sock, from, text, db, session) {
       )
       .join("\n");
 
-    await sock.sendMessage(from, {
-      text: `*Select Plan for ${choice.label}:*\n\n${lines}\n\nReply with a number (1-${res.rows.length}).`,
-    });
+    await sendMessage(from, `*Select Plan for ${choice.label}:*\n\n${lines}\n\nReply with a number (1-${res.rows.length}).`,);
 
     return true;
   }
@@ -843,18 +858,14 @@ async function handleAdminSession(sock, from, text, db, session) {
     const position = parseInt(text, 10);
     const { plans } = session;
     if (isNaN(position) || position < 1 || position > plans.length) {
-      await sock.sendMessage(from, {
-        text: `Please reply with a valid number from the list. (Or type !cancel)`,
-      });
+      await sendMessage(from, `Please reply with a valid number from the list. (Or type !cancel)`,);
       return true;
     }
 
     const plan = plans[position - 1];
     adminSessions.delete(from); // Clear session early
 
-    await sock.sendMessage(from, {
-      text: `⏳ Activating *${plan.name}* for *${targetUser.hotspot_username}*...`,
-    });
+    await sendMessage(from, `⏳ Activating *${plan.name}* for *${targetUser.hotspot_username}*...`,);
 
     try {
       // 1. Create a "cash" payment
@@ -915,17 +926,14 @@ async function handleAdminSession(sock, from, text, db, session) {
       }
 
       // 3. Notify Admin
-      await sock.sendMessage(from, {
-        text:
-          `✅ Successfully activated *${plan.name}* for *${targetUser.hotspot_username}*.\n` +
+      await sendMessage(from, `✅ Successfully activated *${plan.name}* for *${targetUser.hotspot_username}*.\n` +
           (isRenewal
             ? `⏳ Plan was queued to start on ${new Date(activeSub.expiry_time).toDateString()}.`
-            : `📡 Plan is now active.`),
-      });
+            : `📡 Plan is now active.`),);
 
       // 4. Notify User
       const targetJidRes = await db.query(
-        `SELECT remote_jid FROM whatsapp_sessions WHERE phone = $1`,
+        `SELECT remote_jid FROM chat_sessions WHERE phone = $1`,
         [targetUser.phone],
       );
       const targetJid =
@@ -934,23 +942,17 @@ async function handleAdminSession(sock, from, text, db, session) {
 
       try {
         if (isRenewal) {
-          await sock.sendMessage(targetJid, {
-            text:
-              `✅ *Your plan has been activated!* (by Admin)\n\n` +
+          await sendMessage(targetPhone, `✅ *Your plan has been activated!* (by Admin)\n\n` +
               `📡 Plan: *${plan.name}*\n` +
               `⏳ *Queued* — activates on *${new Date(activeSub.expiry_time).toDateString()}* when your current plan expires.` +
               (bonusDays > 0
                 ? `\n🎁 *+${bonusDays} free day${bonusDays > 1 ? "s" : ""} added!* 🎉`
-                : ""),
-          });
+                : ""),);
         } else {
-          await sock.sendMessage(targetJid, {
-            text:
-              `✅ *Your plan has been activated!* (by Admin)\n\n` +
+          await sendMessage(targetPhone, `✅ *Your plan has been activated!* (by Admin)\n\n` +
               `📡 Plan: *${plan.name}*\n` +
               `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
-              `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`,
-          });
+              `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`,);
         }
       } catch (err) {
         console.error(
@@ -967,10 +969,8 @@ async function handleAdminSession(sock, from, text, db, session) {
       ) {
         await provisionOrQueue(
           db,
-          sock,
           targetUser,
           plan,
-          targetJid,
           targetUser.hotspot_username,
           targetUser.hotspot_password,
           false,
@@ -979,15 +979,11 @@ async function handleAdminSession(sock, from, text, db, session) {
         );
       } else if (!isRenewal) {
         // User doesn't have credentials yet, tell admin they need to log in to the bot
-        await sock.sendMessage(from, {
-          text: `⚠️ *Note:* User *${targetUser.hotspot_username}* hasn't set up their MikroTik credentials yet. They need to reply to the bot to finish setup.`,
-        });
+        await sendMessage(from, `⚠️ *Note:* User *${targetUser.hotspot_username}* hasn't set up their MikroTik credentials yet. They need to reply to the bot to finish setup.`,);
       }
     } catch (err) {
       console.error("Admin activation failed:", err);
-      await sock.sendMessage(from, {
-        text: `❌ Failed to activate plan: ${err.message}`,
-      });
+      await sendMessage(from, `❌ Failed to activate plan: ${err.message}`,);
     }
     return true;
   }
@@ -996,9 +992,7 @@ async function handleAdminSession(sock, from, text, db, session) {
     const { subs, targetUser } = session;
     const position = parseInt(text, 10);
     if (isNaN(position) || position < 1 || position > subs.length) {
-      await sock.sendMessage(from, {
-        text: `Please reply with a number between 1 and ${subs.length}. (Or type !cancel)`,
-      });
+      await sendMessage(from, `Please reply with a number between 1 and ${subs.length}. (Or type !cancel)`,);
       return true;
     }
 
@@ -1011,9 +1005,7 @@ async function handleAdminSession(sock, from, text, db, session) {
       sub,
     });
 
-    await sock.sendMessage(from, {
-      text:
-        `⚠️ *Confirm Deletion*\n\n` +
+    await sendMessage(from, `⚠️ *Confirm Deletion*\n\n` +
         `User: *${targetUser.hotspot_username}*\n` +
         `Plan: *${sub.plan_name}*\n` +
         `Status: *${statusIcon}*\n` +
@@ -1021,8 +1013,7 @@ async function handleAdminSession(sock, from, text, db, session) {
         (sub.status === "active"
           ? `🔴 This will *cut their internet immediately* and remove them from MikroTik.\n\n`
           : `ℹ️ This plan is queued and not yet active — no internet will be cut.\n\n`) +
-        `Reply *YES* to confirm or *NO* to cancel.`,
-    });
+        `Reply *YES* to confirm or *NO* to cancel.`,);
     return true;
   }
 
@@ -1031,7 +1022,7 @@ async function handleAdminSession(sock, from, text, db, session) {
 
     if (text.toLowerCase() !== "yes") {
       adminSessions.delete(from);
-      await sock.sendMessage(from, { text: `❌ Deletion cancelled.` });
+      await sendMessage(from, `❌ Deletion cancelled.`);
       return true;
     }
 
@@ -1066,38 +1057,30 @@ async function handleAdminSession(sock, from, text, db, session) {
             "MikroTik removal failed during !delsub:",
             mikrotikErr.message,
           );
-          await sock.sendMessage(from, {
-            text: `⚠️ Subscription deleted from DB but *could not remove from MikroTik*: ${mikrotikErr.message}\nYou may need to remove *${targetUser.hotspot_username}* manually from the router.`,
-          });
+          await sendMessage(from, `⚠️ Subscription deleted from DB but *could not remove from MikroTik*: ${mikrotikErr.message}\nYou may need to remove *${targetUser.hotspot_username}* manually from the router.`,);
         }
       }
 
       // 3. Confirm to admin
-      await sock.sendMessage(from, {
-        text:
-          `✅ *Subscription Deleted*\n\n` +
+      await sendMessage(from, `✅ *Subscription Deleted*\n\n` +
           `User: *${targetUser.hotspot_username}*\n` +
           `Plan: *${sub.plan_name}*\n` +
           (sub.status === "active"
             ? `🔴 Removed from MikroTik — internet access cut.`
-            : `ℹ️ Queued plan removed — no internet disruption.`),
-      });
+            : `ℹ️ Queued plan removed — no internet disruption.`),);
 
       // 4. Notify user
       try {
         const targetJidRes = await db.query(
-          `SELECT remote_jid FROM whatsapp_sessions WHERE phone = $1`,
+          `SELECT remote_jid FROM chat_sessions WHERE phone = $1`,
           [targetUser.phone],
         );
         const targetJid =
           targetJidRes.rows[0]?.remote_jid ||
           `${targetUser.phone}@s.whatsapp.net`;
-        await sock.sendMessage(targetJid, {
-          text:
-            sub.status === "active"
+        await sendMessage(targetPhone, sub.status === "active"
               ? `ℹ️ *Notice from Chulo Speednet*\n\nYour *${sub.plan_name}* plan has been removed by an admin.\n\nIf you believe this is a mistake, please contact support.`
-              : `ℹ️ *Notice from Chulo Speednet*\n\nYour queued *${sub.plan_name}* plan has been cancelled by an admin.\n\nIf you believe this is a mistake, please contact support.`,
-        });
+              : `ℹ️ *Notice from Chulo Speednet*\n\nYour queued *${sub.plan_name}* plan has been cancelled by an admin.\n\nIf you believe this is a mistake, please contact support.`,);
       } catch (notifyErr) {
         console.error(
           "Failed to notify user after !delsub:",
@@ -1106,9 +1089,7 @@ async function handleAdminSession(sock, from, text, db, session) {
       }
     } catch (err) {
       console.error("!delsub failed:", err.message);
-      await sock.sendMessage(from, {
-        text: `❌ Failed to delete subscription: ${err.message}`,
-      });
+      await sendMessage(from, `❌ Failed to delete subscription: ${err.message}`,);
     }
     return true;
   }
@@ -1119,23 +1100,18 @@ async function handleAdminSession(sock, from, text, db, session) {
     const name = text.trim();
 
     if (!name || name.length < 2) {
-      await sock.sendMessage(from, {
-        text: `Please enter a valid name (at least 2 characters). (Or type !cancel)`,
-      });
+      await sendMessage(from, `Please enter a valid name (at least 2 characters). (Or type !cancel)`,);
       return true;
     }
 
     adminSessions.set(from, { ...session, step: "newuser_device", name });
 
-    await sock.sendMessage(from, {
-      text:
-        `👤 Name: *${name}*\n\n` +
+    await sendMessage(from, `👤 Name: *${name}*\n\n` +
         `*Select Device Limit:*\n` +
         `1️⃣ Single Device\n` +
         `2️⃣ Two Devices\n` +
         `3️⃣ Three Devices\n\n` +
-        `Reply with *1*, *2*, or *3*, or type *!cancel*.`,
-    });
+        `Reply with *1*, *2*, or *3*, or type *!cancel*.`,);
     return true;
   }
 
@@ -1147,9 +1123,7 @@ async function handleAdminSession(sock, from, text, db, session) {
     };
     const choice = profileMap[text.trim()];
     if (!choice) {
-      await sock.sendMessage(from, {
-        text: `Please reply with *1*, *2*, or *3*. (Or type !cancel)`,
-      });
+      await sendMessage(from, `Please reply with *1*, *2*, or *3*. (Or type !cancel)`,);
       return true;
     }
 
@@ -1158,9 +1132,7 @@ async function handleAdminSession(sock, from, text, db, session) {
       [choice.profile],
     );
     if (!plansRes.rows.length) {
-      await sock.sendMessage(from, {
-        text: `❌ No plans found for *${choice.label}*. Use !addplan to create one first.`,
-      });
+      await sendMessage(from, `❌ No plans found for *${choice.label}*. Use !addplan to create one first.`,);
       adminSessions.delete(from);
       return true;
     }
@@ -1179,9 +1151,7 @@ async function handleAdminSession(sock, from, text, db, session) {
       )
       .join("\n");
 
-    await sock.sendMessage(from, {
-      text: `📡 *Select Plan for ${choice.label}:*\n\n${lines}\n\nReply with a number (1-${plansRes.rows.length}).`,
-    });
+    await sendMessage(from, `📡 *Select Plan for ${choice.label}:*\n\n${lines}\n\nReply with a number (1-${plansRes.rows.length}).`,);
     return true;
   }
 
@@ -1189,23 +1159,18 @@ async function handleAdminSession(sock, from, text, db, session) {
     const position = parseInt(text.trim(), 10);
     const { plans } = session;
     if (isNaN(position) || position < 1 || position > plans.length) {
-      await sock.sendMessage(from, {
-        text: `Please reply with a valid number from the list. (Or type !cancel)`,
-      });
+      await sendMessage(from, `Please reply with a valid number from the list. (Or type !cancel)`,);
       return true;
     }
     const plan = plans[position - 1];
     adminSessions.set(from, { ...session, step: "newuser_username", plan });
-    await sock.sendMessage(from, {
-      text:
-        `📝 *Set Hotspot Username*\n\n` +
+    await sendMessage(from, `📝 *Set Hotspot Username*\n\n` +
         `Choose a username for *${session.name}*'s hotspot login.\n\n` +
         `Rules:\n` +
         `• Letters and numbers only (no spaces)\n` +
         `• 3–20 characters\n` +
         `• Example: \`emeka\` or \`emeka2024\`\n\n` +
-        `Reply with the username:`,
-    });
+        `Reply with the username:`,);
     return true;
   }
 
@@ -1213,20 +1178,14 @@ async function handleAdminSession(sock, from, text, db, session) {
     const username = sanitizeUsername(text);
     // MikroTik hotspot usernames must be alphanumeric and underscores only
     if (/^\d+$/.test(username)) {
-      await sock.sendMessage(from, {
-        text:
-          `❌ Usernames cannot be numbers only.\n\n` +
-          `Please include at least one letter. Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again:`,
-      });
+      await sendMessage(from, `❌ Usernames cannot be numbers only.\n\n` +
+          `Please include at least one letter. Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again:`,);
       return true;
     }
 
     if (!isValidUsername(username)) {
-      await sock.sendMessage(from, {
-        text:
-          `❌ Invalid username. Use only *letters, numbers, or underscores* (3–20 chars).\n\n` +
-          `Example: \`john\` or \`John_2\` or \`john20\`, etc.\n\nTry again:`,
-      });
+      await sendMessage(from, `❌ Invalid username. Use only *letters, numbers, or underscores* (3–20 chars).\n\n` +
+          `Example: \`john\` or \`John_2\` or \`john20\`, etc.\n\nTry again:`,);
       return true;
     }
 
@@ -1236,29 +1195,22 @@ async function handleAdminSession(sock, from, text, db, session) {
       [username],
     );
     if (takenRes.rows.length) {
-      await sock.sendMessage(from, {
-        text: `❌ Username *${username}* is already taken. Try a different one.`,
-      });
+      await sendMessage(from, `❌ Username *${username}* is already taken. Try a different one.`,);
       return true;
     }
     adminSessions.set(from, { ...session, step: "newuser_password", username });
-    await sock.sendMessage(from, {
-      text:
-        `🔐 *Set Hotspot Password*\n\n` +
+    await sendMessage(from, `🔐 *Set Hotspot Password*\n\n` +
         `Choose a password for *${username}*.\n\n` +
         `• At least 4 characters\n` +
         `• Example: \`pass1234\`\n\n` +
-        `Reply with the password:`,
-    });
+        `Reply with the password:`,);
     return true;
   }
 
   if (step === "newuser_password") {
     const password = text.trim();
     if (!isValidPassword(password)) {
-      await sock.sendMessage(from, {
-        text: `❌ Password must be exactly *4 digits* (e.g. 1234). Please try again:`,
-      });
+      await sendMessage(from, `❌ Password must be exactly *4 digits* (e.g. 1234). Please try again:`,);
       return true;
     }
 
@@ -1275,9 +1227,7 @@ async function handleAdminSession(sock, from, text, db, session) {
       newExpiry: newExpiry.toISOString(),
     });
 
-    await sock.sendMessage(from, {
-      text:
-        `✅ *Confirm New Customer*\n\n` +
+    await sendMessage(from, `✅ *Confirm New Customer*\n\n` +
         `📞 Phone: *+${session.phone}*\n` +
         `👤 Name: *${session.name}*\n` +
         `🌐 Username: *${session.username}*\n` +
@@ -1285,15 +1235,14 @@ async function handleAdminSession(sock, from, text, db, session) {
         `📡 Plan: *${session.plan.name}* — ₦${Number(session.plan.price).toLocaleString()}\n` +
         `📱 Devices: *${session.label}*\n` +
         `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
-        `Reply *YES* to create & activate, or *NO* to cancel.`,
-    });
+        `Reply *YES* to create & activate, or *NO* to cancel.`,);
     return true;
   }
 
   if (step === "newuser_confirm") {
     if (text.trim().toLowerCase() !== "yes") {
       adminSessions.delete(from);
-      await sock.sendMessage(from, { text: `❌ New user creation cancelled.` });
+      await sendMessage(from, `❌ New user creation cancelled.`);
       return true;
     }
 
@@ -1309,9 +1258,7 @@ async function handleAdminSession(sock, from, text, db, session) {
     const newExpiry = new Date(newExpiryISO);
     adminSessions.delete(from);
 
-    await sock.sendMessage(from, {
-      text: `⏳ Creating account and provisioning *${username}* on MikroTik...`,
-    });
+    await sendMessage(from, `⏳ Creating account and provisioning *${username}* on MikroTik...`,);
 
     // BUG FIX: Wrap all DB writes in a transaction so a mid-flight error
     // (e.g. subscription insert fails) doesn't leave an orphaned user record.
@@ -1347,10 +1294,10 @@ async function handleAdminSession(sock, from, text, db, session) {
         newUser = userInsert.rows[0];
       }
 
-      // 2. Create whatsapp_sessions row so the bot recognises them later
+      // 2. Create chat_sessions row so the bot recognises them later
       await client.query(
         `
-                INSERT INTO whatsapp_sessions (phone, remote_jid, state, last_updated)
+                INSERT INTO chat_sessions (phone, remote_jid, state, last_updated)
                 VALUES ($1, $2, 'start', CURRENT_TIMESTAMP)
                 ON CONFLICT (phone) DO NOTHING
             `,
@@ -1389,21 +1336,16 @@ async function handleAdminSession(sock, from, text, db, session) {
     }
     if (txError) {
       console.error("!newuser DB transaction failed:", txError.message);
-      await sock.sendMessage(from, {
-        text: `❌ Failed to create user: ${txError.message}`,
-      });
+      await sendMessage(from, `❌ Failed to create user: ${txError.message}`,);
       return true;
     }
 
     try {
       // 5. Provision on MikroTik (outside transaction — MikroTik is not a DB)
-      const targetJid = `${phone}@s.whatsapp.net`;
       await provisionOrQueue(
         db,
-        sock,
         newUser,
         plan,
-        targetJid,
         username,
         password,
         false,
@@ -1412,22 +1354,17 @@ async function handleAdminSession(sock, from, text, db, session) {
       );
 
       // 6. Confirm to admin
-      await sock.sendMessage(from, {
-        text:
-          `✅ *New Customer Created & Activated!*\n\n` +
+      await sendMessage(from, `✅ *New Customer Created & Activated!*\n\n` +
           `📞 Phone: *+${phone}*\n` +
           `👤 Name: *${name}*\n` +
           `🌐 Username: *${username}*\n` +
           `📡 Plan: *${plan.name}*\n` +
           `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
-          `MikroTik provisioned ✅`,
-      });
+          `MikroTik provisioned ✅`,);
 
       // 7. Notify customer on WhatsApp
       try {
-        await sock.sendMessage(targetJid, {
-          text:
-            `👋 *Welcome to Chulo Speednet!*\n\n` +
+        await sendMessage(targetPhone, `👋 *Welcome to Chulo Speednet!*\n\n` +
             `Your account has been set up by our team.\n\n` +
             `🌐 *Your Login Details*\n` +
             `Username: \`${username}\`\n` +
@@ -1435,19 +1372,14 @@ async function handleAdminSession(sock, from, text, db, session) {
             `📡 Plan: *${plan.name}*\n` +
             `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
             `Connect at: *http://10.5.50.1*\n\n` +
-            `Send *HI* anytime to manage your account. Enjoy! 🛰️`,
-        });
+            `Send *HI* anytime to manage your account. Enjoy! 🛰️`,);
       } catch (notifyErr) {
         console.error("Failed to notify new user:", notifyErr.message);
-        await sock.sendMessage(from, {
-          text: `⚠️ Account created but couldn't send WhatsApp notification to +${phone}. Share the credentials manually.`,
-        });
+        await sendMessage(from, `⚠️ Account created but couldn't send WhatsApp notification to +${phone}. Share the credentials manually.`,);
       }
     } catch (err) {
       console.error("!newuser post-DB step failed:", err.message);
-      await sock.sendMessage(from, {
-        text: `⚠️ User was created in DB but an error occurred after: ${err.message}`,
-      });
+      await sendMessage(from, `⚠️ User was created in DB but an error occurred after: ${err.message}`,);
     }
     return true;
   }
@@ -1462,39 +1394,29 @@ async function handleAdminSession(sock, from, text, db, session) {
     };
     const choice = profileMap[text];
     if (!choice) {
-      await sock.sendMessage(from, {
-        text: `Please reply with *1*, *2*, or *3*. (Or type !cancel)`,
-      });
+      await sendMessage(from, `Please reply with *1*, *2*, or *3*. (Or type !cancel)`,);
       return true;
     }
     adminSessions.set(from, { step: "addplan_price", ...choice });
-    await sock.sendMessage(from, {
-      text: `💰 *Enter the plan price in ₦* (numbers only):\nExample: \`3500\``,
-    });
+    await sendMessage(from, `💰 *Enter the plan price in ₦* (numbers only):\nExample: \`3500\``,);
     return true;
   }
 
   if (step === "addplan_price") {
     const price = parseInt(text.replace(/[^\d]/g, ""), 10);
     if (isNaN(price) || price <= 0) {
-      await sock.sendMessage(from, {
-        text: `Please enter a valid price (numbers only). (Or type !cancel)`,
-      });
+      await sendMessage(from, `Please enter a valid price (numbers only). (Or type !cancel)`,);
       return true;
     }
     adminSessions.set(from, { ...session, step: "addplan_duration", price });
-    await sock.sendMessage(from, {
-      text: `📅 *Enter the plan duration in days* (numbers only):\nExample: \`30\` for 1 month, \`7\` for 1 week`,
-    });
+    await sendMessage(from, `📅 *Enter the plan duration in days* (numbers only):\nExample: \`30\` for 1 month, \`7\` for 1 week`,);
     return true;
   }
 
   if (step === "addplan_duration") {
     const days = parseInt(text.replace(/[^\d]/g, ""), 10);
     if (isNaN(days) || days <= 0) {
-      await sock.sendMessage(from, {
-        text: `Please enter a valid number of days. (Or type !cancel)`,
-      });
+      await sendMessage(from, `Please enter a valid number of days. (Or type !cancel)`,);
       return true;
     }
 
@@ -1521,23 +1443,20 @@ async function handleAdminSession(sock, from, text, db, session) {
       planName,
     });
 
-    await sock.sendMessage(from, {
-      text:
-        `ℹ️ *Confirm New Plan*\n\n` +
+    await sendMessage(from, `ℹ️ *Confirm New Plan*\n\n` +
         `📝 Name: *${planName}*\n` +
         `💰 Price: *₦${Number(session.price).toLocaleString()}*\n` +
         `📅 Duration: *${days} days*\n` +
         `📱 Devices: *${session.label}*\n` +
         `⚙️ Profile: \`${session.profile}\`\n\n` +
-        `Reply *YES* to save or *NO* to cancel.`,
-    });
+        `Reply *YES* to save or *NO* to cancel.`,);
     return true;
   }
 
   if (step === "addplan_confirm") {
     if (text.toLowerCase() !== "yes") {
       adminSessions.delete(from);
-      await sock.sendMessage(from, { text: `❌ Plan creation cancelled.` });
+      await sendMessage(from, `❌ Plan creation cancelled.`);
       return true;
     }
 
@@ -1551,19 +1470,14 @@ async function handleAdminSession(sock, from, text, db, session) {
         [session.planName, session.price, session.days, session.profile],
       );
       const newId = res.rows[0].id;
-      await sock.sendMessage(from, {
-        text:
-          `✅ *Plan Created Successfully!*\n\n` +
+      await sendMessage(from, `✅ *Plan Created Successfully!*\n\n` +
           `📝 *${session.planName}*\n` +
           `💰 ₦${Number(session.price).toLocaleString()} · ${session.days} days · ${session.label}\n` +
           `🔑 Plan ID: ${newId}\n\n` +
-          `Users can now purchase this plan immediately.`,
-      });
+          `Users can now purchase this plan immediately.`,);
     } catch (err) {
       console.error("!addplan failed:", err.message);
-      await sock.sendMessage(from, {
-        text: `❌ Failed to save plan: ${err.message}`,
-      });
+      await sendMessage(from, `❌ Failed to save plan: ${err.message}`,);
     }
     return true;
   }

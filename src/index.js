@@ -1,6 +1,8 @@
 import vibe from "vibe-gx";
 import { handleMessage } from "./handleMessage.js";
 import { connectToWhatsApp } from "./whatsapp-connect.js";
+import { startTelegramBot } from "./telegram-connect.js";
+import { initMessaging, updateWhatsAppSocket, updateTelegramBot } from "./messaging.js";
 import pg from "pg";
 import { fulfillPayment } from "./fulfillPayment.js";
 import { processPendingQueue } from "./provisioningQueue.js";
@@ -49,16 +51,41 @@ const setupDB = async () => {
 };
 
 let globalSock = null;
+let telegramBot = null;
 
 async function startBot() {
-  globalSock = await connectToWhatsApp(
-    (sock, from, pnJid, text, pushName) =>
-      handleMessage(sock, from, pnJid, text, pushName, db),
-    (newSock) => {
-      globalSock = newSock;
-      console.log("🔄 globalSock updated to live WhatsApp socket");
-    },
-  );
+  const enableTelegram = process.env.ENABLE_TELEGRAM !== "false";
+  const enableWhatsApp = process.env.ENABLE_WHATSAPP === "true";
+
+  console.log(`\n🚀 Bot startup config:`);
+  console.log(`   📱 WhatsApp : ${enableWhatsApp ? "✅ enabled" : "❌ disabled"}`);
+  console.log(`   ✈️  Telegram : ${enableTelegram ? "✅ enabled" : "❌ disabled"}\n`);
+
+  if (enableTelegram) {
+    // startTelegramBot is non-blocking — it retries forever in the background.
+    // updateTelegramBot() is called automatically once the bot connects.
+    startTelegramBot(
+      db,
+      (platform, remoteId, phone, text, pushName) =>
+        handleMessage(platform, remoteId, phone, text, pushName, db)
+    );
+  }
+
+  if (enableWhatsApp) {
+    globalSock = await connectToWhatsApp(
+      (sock, from, pnJid, text, pushName) =>
+        handleMessage("whatsapp", from, pnJid, text, pushName, db),
+      (newSock) => {
+        globalSock = newSock;
+        updateWhatsAppSocket(newSock);
+        console.log("🔄 globalSock updated to live WhatsApp socket");
+      },
+    );
+  }
+
+  // Initialize the central messaging router with whatever connected
+  initMessaging(db, globalSock || null, telegramBot);
+  console.log("✅ Messaging router initialized. Telegram:", telegramBot ? "connected" : "disabled", "| WhatsApp:", globalSock ? "connected" : "disabled");
 }
 
 app.get("/", () => "Welcome to Chulo Speednet");
@@ -111,11 +138,11 @@ app.post("/webhook/flutterwave", async (req, res) => {
         const user = paymentRes.rows[0];
 
         if (user) {
-          if (!globalSock) {
-            req.log.error("globalSock is null — WhatsApp not connected yet");
+          if (!globalSock && !telegramBot) {
+            req.log.error("Bots are not connected yet");
             return;
           }
-          await fulfillPayment(db, globalSock, user, amountPaid);
+          await fulfillPayment(db, user, amountPaid);
         } else {
           req.log.warn(
             { txRef },
@@ -149,11 +176,11 @@ app.post("/webhook/flutterwave", async (req, res) => {
         const user = paymentRes.rows[0];
 
         if (user) {
-          if (!globalSock) {
-            req.log.error("globalSock is null — WhatsApp not connected yet");
+          if (!globalSock && !telegramBot) {
+            req.log.error("Bots are not connected yet");
             return;
           }
-          await fulfillPayment(db, globalSock, user, amountPaid);
+          await fulfillPayment(db, user, amountPaid);
 
         } else {
           req.log.warn(
@@ -168,15 +195,21 @@ app.post("/webhook/flutterwave", async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3001, () => {
-  startBot();
-  setupDB();
+app.listen(process.env.PORT || 3001, async () => {
+  // 1. Ensure DB tables exist before running anything else
+  await setupDB();
+
+  // 2. Pre-initialize the messaging router with db pool immediately
+  // to avoid "DB pool not initialized" if schedulers run before bots connect
+  initMessaging(db, null, null);
+
+  // 3. Start bots in background
+  startBot().catch(err => console.error("❌ Error starting bots:", err));
 
   // Provisioning retry scheduler — checks every 60s for queued MikroTik jobs
   setInterval(async () => {
-    if (!globalSock) return; // Don't retry if WhatsApp isn't connected yet
     try {
-      await processPendingQueue(db, globalSock);
+      await processPendingQueue(db);
     } catch (err) {
       console.error("⚠️ Provisioning queue scheduler error:", err.message);
     }
@@ -185,5 +218,5 @@ app.listen(process.env.PORT || 3001, () => {
   console.log("🕐 Provisioning retry scheduler started (60s interval)");
 
   // Expiry alerts + MikroTik cleanup
-  startScheduler(db, () => globalSock);
+  startScheduler(db);
 });

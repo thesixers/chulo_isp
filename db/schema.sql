@@ -101,29 +101,33 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS alert_sent BOOLEAN DEFAULT false;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
--- Session state for WhatsApp conversational flow
-CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+-- Session state for conversational flow (WhatsApp & Telegram)
+CREATE TABLE IF NOT EXISTS chat_sessions (
     phone VARCHAR(200) PRIMARY KEY,
     state session_state DEFAULT 'start',
     plan_id INTEGER REFERENCES plans(id),
-    remote_jid VARCHAR(100),              -- Exact Baileys JID (may be @lid format, not @s.whatsapp.net)
+    remote_jid VARCHAR(100),              -- WhatsApp JID
+    telegram_chat_id VARCHAR(100),        -- Telegram Chat ID
+    preferred_platform VARCHAR(20) DEFAULT 'whatsapp', -- 'whatsapp' | 'telegram'
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Add remote_jid to existing sessions table
-ALTER TABLE whatsapp_sessions ADD COLUMN IF NOT EXISTS remote_jid VARCHAR(100);
+-- Add new columns to existing sessions table (handled in migration below, but kept for schema consistency)
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS remote_jid VARCHAR(100);
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(100);
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS preferred_platform VARCHAR(20) DEFAULT 'whatsapp';
 -- Add gift target user reference (NULL when buying for self)
-ALTER TABLE whatsapp_sessions ADD COLUMN IF NOT EXISTS gift_target_user_id INT REFERENCES users(id);
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS gift_target_user_id INT REFERENCES users(id);
 -- Temp staging columns for username/password confirmation flow
-ALTER TABLE whatsapp_sessions ADD COLUMN IF NOT EXISTS pending_username VARCHAR(50);
-ALTER TABLE whatsapp_sessions ADD COLUMN IF NOT EXISTS pending_password VARCHAR(10);
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS pending_username VARCHAR(50);
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS pending_password VARCHAR(10);
 
 -- MikroTik provisioning retry queue
 CREATE TABLE IF NOT EXISTS provisioning_queue (
     id               SERIAL PRIMARY KEY,
     user_id          INTEGER REFERENCES users(id),
-    remote_jid       VARCHAR(100) NOT NULL,      -- WhatsApp JID to notify on success/failure
-    phone            VARCHAR(200) NOT NULL,       -- MikroTik username
+    phone            VARCHAR(200) NOT NULL,       -- MikroTik username and Phone for messaging
+
     mikrotik_profile VARCHAR(100) NOT NULL,
     plan_name        VARCHAR(225),
     pin              VARCHAR(10) NOT NULL,        -- Pre-generated PIN (consistent across retries)
@@ -156,3 +160,22 @@ CREATE INDEX IF NOT EXISTS idx_prov_queue_pending ON provisioning_queue (status,
 -- Step 4: Remove unused session_state values (Postgres doesn't support DROP VALUE on ENUMs,
 --         so if you previously ran the static migration, you can leave those values in place —
 --         they'll simply go unused. Or recreate the type from scratch on a clean DB.)
+
+-- Step 5: Telegram Integration & Message Queue (Run this to migrate to the new dual-engine system)
+ALTER TABLE IF EXISTS whatsapp_sessions RENAME TO chat_sessions;
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(100);
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS preferred_platform VARCHAR(20) DEFAULT 'whatsapp';
+ALTER TABLE provisioning_queue DROP COLUMN IF EXISTS remote_jid;
+
+-- Offline Message Queue
+CREATE TABLE IF NOT EXISTS message_queue (
+    id SERIAL PRIMARY KEY,
+    phone VARCHAR(200) NOT NULL,
+    message_text TEXT NOT NULL,
+    send_to_both BOOLEAN DEFAULT false,
+    attempts INTEGER DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'pending', -- pending | failed
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_attempted_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_msg_queue_pending ON message_queue (status, created_at);

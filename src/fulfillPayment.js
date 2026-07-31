@@ -1,5 +1,6 @@
 import { provisionHotspotUser, buildMikrotikComment } from "./mikrotik.js";
 import { enqueueProvisioning } from "./provisioningQueue.js";
+import { sendMessage } from "./messaging.js";
 
 /**
  * Fulfills a confirmed payment:
@@ -7,18 +8,16 @@ import { enqueueProvisioning } from "./provisioningQueue.js";
  * - Renewals: sends confirmation, then re-provisions on MikroTik using stored credentials
  *
  * @param {object} db          - pg Pool instance
- * @param {object} sock        - Baileys socket instance
  * @param {object} user        - Full user row from the `users` table
  * @param {number} amountPaid  - Amount received, taken directly from the webhook payload
  */
-export async function fulfillPayment(db, sock, user, amountPaid) {
-  // Use the exact JID stored from the user's last message — avoids LID/phone mismatch
+export async function fulfillPayment(db, user, amountPaid) {
+  // Fetch session data
   const sessionRes = await db.query(
-    `SELECT plan_id, remote_jid, gift_target_user_id FROM whatsapp_sessions WHERE phone = $1`,
+    `SELECT plan_id, gift_target_user_id FROM chat_sessions WHERE phone = $1`,
     [user.phone],
   );
   const session = sessionRes.rows[0];
-  const remoteJid = session?.remote_jid || `${user.phone}@s.whatsapp.net`;
   const giftTargetUserId = session?.gift_target_user_id || null;
 
   // If this is a gift purchase, fetch User B's record. Otherwise use User A (the payer).
@@ -33,7 +32,7 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
 
   const isGift = giftTargetUserId && targetUser.id !== user.id;
 
-  console.log(`💬 fulfillPayment: remoteJid=${remoteJid}`);
+  console.log(`💬 fulfillPayment: phone=${user.phone}, isGift=${isGift}`);
 
   // 1. Find the user's latest pending payment
   const paymentRes = await db.query(
@@ -47,18 +46,14 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
 
   const payment = paymentRes.rows[0];
   if (!payment) {
-    await sock.sendMessage(remoteJid, {
-      text: `⚠️ We couldn't find a pending payment on your account. Please send *HI* to start a new session.`,
-    });
+    await sendMessage(user.phone, `⚠️ We couldn't find a pending payment on your account. Please send *HI* to start a new session.`);
     return;
   }
 
   // 2. Get the plan from the session (needed to know the expected amount)
   const planId = session?.plan_id;
   if (!planId) {
-    await sock.sendMessage(remoteJid, {
-      text: `⚠️ We couldn't find your selected plan. Please send *HI* to start over or contact chulo speednet support to rectify any payment issue.`,
-    });
+    await sendMessage(user.phone, `⚠️ We couldn't find your selected plan. Please send *HI* to start over or contact chulo speednet support to rectify any payment issue.`);
     return;
   }
 
@@ -67,9 +62,7 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
   const plan = planRes.rows[0];
 
   if (!plan) {
-    await sock.sendMessage(remoteJid, {
-      text: `⚠️ Your selected plan no longer exists. Please send *HI* to choose a new one or contact chulo speednet support to rectify any payment issue.`,
-    });
+    await sendMessage(user.phone, `⚠️ Your selected plan no longer exists. Please send *HI* to choose a new one or contact chulo speednet support to rectify any payment issue.`);
     return;
   }
 
@@ -80,12 +73,11 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
     console.warn(
       `⚠️ fulfillPayment: underpayment — expected ₦${plan.price}, got ₦${amountPaid}`,
     );
-    await sock.sendMessage(remoteJid, {
-      text:
+    await sendMessage(user.phone,
         `⚠️ *Underpayment Detected*\n\n` +
         `We received *₦${Number(amountPaid).toLocaleString()}* but your plan requires *₦${Number(plan.price).toLocaleString()}*.\n\n` +
-        `Please transfer the remaining *₦${(plan.price - amountPaid).toLocaleString()}* to the same account number and it will be applied automatically.`,
-    });
+        `Please transfer the remaining *₦${(plan.price - amountPaid).toLocaleString()}* to the same account number and it will be applied automatically.`
+    );
     return;
   }
 
@@ -103,9 +95,7 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
     console.log(
       `⚠️ fulfillPayment: payment ${payment.id} already processed — skipping duplicate`,
     );
-    await sock.sendMessage(remoteJid, {
-      text: `✅ Your payment has already been processed! Check your subscription with option *4* from the main menu.`,
-    });
+    await sendMessage(user.phone, `✅ Your payment has already been processed! Check your subscription with option *4* from the main menu.`);
     return;
   }
 
@@ -169,13 +159,12 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
 
   // 6. Send payment confirmation
   console.log(
-    `📤 Sending payment confirmation to ${remoteJid} (isGift=${isGift}, isRenewal=${isRenewal})`,
+    `📤 Sending payment confirmation to ${user.phone} (isGift=${isGift}, isRenewal=${isRenewal})`,
   );
   try {
     if (isRenewal) {
       // Plan is queued — notify payer
-      await sock.sendMessage(remoteJid, {
-        text:
+      await sendMessage(user.phone,
           `✅ *Payment Confirmed!*\n\n` +
           `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n` +
           (isGift
@@ -185,56 +174,39 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
           `The plan will automatically activate when the current plan expires on *${new Date(activeSub.expiry_time).toDateString()}*.` +
           (bonusDays > 0
             ? `\n🎁 *+${bonusDays} free day${bonusDays > 1 ? "s" : ""} added!* 🎉`
-            : ""),
-      });
+            : "")
+      );
       // Notify recipient (User B) if this is a gift
       if (isGift) {
-        const targetJid =
-          (
-            await db.query(
-              `SELECT remote_jid FROM whatsapp_sessions WHERE phone = $1`,
-              [targetUser.phone],
-            )
-          ).rows[0]?.remote_jid || `${targetUser.phone}@s.whatsapp.net`;
-        await sock.sendMessage(targetJid, {
-          text:
+        await sendMessage(targetUser.phone,
             `🎁 *Someone gifted you a plan!*\n\n` +
             `📡 Plan: *${plan.name}*\n` +
             `⏳ *Queued* — activates on *${new Date(activeSub.expiry_time).toDateString()}* when your current plan expires.\n\n` +
-            `Reply *HI* to view your subscription.`,
-        });
+            `Reply *HI* to view your subscription.`
+        );
       }
     } else {
       // Fresh activation — notify payer
-      await sock.sendMessage(remoteJid, {
-        text:
+      await sendMessage(user.phone,
           `✅ *Payment Confirmed!*\n\n` +
           `💰 ₦${Number(plan.price).toLocaleString()} received for *${plan.name}*\n` +
           (isGift ? `🎁 Gifted to: *${targetUser.hotspot_username}*\n` : "") +
           `📅 Expires: *${newExpiry.toDateString()}*` +
-          (!isGift ? promoTip(plan.duration_days) : ""),
-      });
+          (!isGift ? promoTip(plan.duration_days) : "")
+      );
       // Notify recipient (User B) if this is a gift
       if (isGift) {
-        const targetJid =
-          (
-            await db.query(
-              `SELECT remote_jid FROM whatsapp_sessions WHERE phone = $1`,
-              [targetUser.phone],
-            )
-          ).rows[0]?.remote_jid || `${targetUser.phone}@s.whatsapp.net`;
-        await sock.sendMessage(targetJid, {
-          text:
+        await sendMessage(targetUser.phone,
             `🎁 *Someone just gifted you internet!*\n\n` +
             `📡 Plan: *${plan.name}*\n` +
             `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
-            `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`,
-        });
+            `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`
+        );
       }
     }
   } catch (msgErr) {
     console.error(
-      `❌ Failed to send confirmation to ${remoteJid}:`,
+      `❌ Failed to send confirmation to ${user.phone}:`,
       msgErr.message,
     );
   }
@@ -243,21 +215,19 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
   if (isRenewal) {
     // ── QUEUED: Do not provision on MikroTik yet. Scheduler handles it. Reset session. ──
     await db.query(
-      `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL, gift_target_user_id = NULL WHERE phone = $1`,
+      `UPDATE chat_sessions SET state = 'start', plan_id = NULL, gift_target_user_id = NULL WHERE phone = $1`,
       [user.phone],
     );
   } else if (targetUser.hotspot_username && targetUser.hotspot_password) {
     // ── FIRST ACTIVATION with existing credentials ──
     await db.query(
-      `UPDATE whatsapp_sessions SET state = 'start', plan_id = NULL, gift_target_user_id = NULL WHERE phone = $1`,
+      `UPDATE chat_sessions SET state = 'start', plan_id = NULL, gift_target_user_id = NULL WHERE phone = $1`,
       [user.phone],
     );
     await provisionOrQueue(
       db,
-      sock,
       targetUser,
       plan,
-      remoteJid,
       targetUser.hotspot_username,
       targetUser.hotspot_password,
       false,
@@ -269,23 +239,22 @@ export async function fulfillPayment(db, sock, user, amountPaid) {
     // This only applies if the target has never set up their account
     await db.query(
       `
-            UPDATE whatsapp_sessions
+            UPDATE chat_sessions
             SET state = 'awaiting_hotspot_username', plan_id = $1, last_updated = CURRENT_TIMESTAMP
             WHERE phone = $2
         `,
       [plan.id, user.phone],
     );
 
-    await sock.sendMessage(remoteJid, {
-      text:
+    await sendMessage(user.phone,
         `🔐 *Set Up Hotspot Login for ${isGift ? targetUser.hotspot_username || "the recipient" : "You"}*\n\n` +
         `Please choose a *username* for the internet connection.\n\n` +
         `Rules:\n` +
         `• Letters and numbers only (no emojis or spaces)\n` +
         `• 3–20 characters\n` +
         `• Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\n` +
-        `Reply with your desired username:`,
-    });
+        `Reply with your desired username:`
+    );
   }
 }
 
@@ -306,10 +275,8 @@ function promoTip(durationDays) {
  */
 export async function provisionOrQueue(
   db,
-  sock,
   user,
   plan,
-  remoteJid,
   username,
   password,
   isRenewal,
@@ -336,27 +303,25 @@ export async function provisionOrQueue(
 
     if (!suppressSuccessMessage) {
       if (isRenewal) {
-        await sock.sendMessage(remoteJid, {
-          text:
+        await sendMessage(user.phone,
             `🎉 *You're back online!*\n\n` +
             `🌐 *Your Starlink Login*\n` +
             `Username: \`${username}\`\n` +
             `Password: \`${password}\`\n\n` +
             `Connect at: *http://10.5.50.1*\n` +
             `Enjoy your internet! 🛰️` +
-            promoTip(plan.duration_days),
-        });
+            promoTip(plan.duration_days)
+        );
       } else {
-        await sock.sendMessage(remoteJid, {
-          text:
+        await sendMessage(user.phone,
             `🎉 *Your Chulo Speednet account is ready!*\n\n` +
             `🌐 *Login Details*\n` +
             `Username: \`${username}\`\n` +
             `Password: \`${password}\`\n\n` +
             `Connect at: *http://10.5.50.1/*\n\n` +
             `Welcome to Chulo Speednet! 🛰️` +
-            promoTip(plan.duration_days),
-        });
+            promoTip(plan.duration_days)
+        );
       }
     }
   } catch (err) {
@@ -365,19 +330,17 @@ export async function provisionOrQueue(
       err.message,
     );
 
-    await sock.sendMessage(remoteJid, {
-      text:
+    await sendMessage(user.phone,
         `⚙️ *Account Setup in Progress*\n\n` +
         `Your payment is confirmed ✅\n\n` +
         `We're having a brief issue connecting to the hotspot router. ` +
         `Our system will *automatically retry* and send your credentials once restored.\n\n` +
-        `⏳ No action needed — you'll receive your login details shortly!`,
-    });
+        `⏳ No action needed — you'll receive your login details shortly!`
+    );
 
     try {
       await enqueueProvisioning(db, {
         userId: user.id,
-        remoteJid,
         phone: username, // username IS the MikroTik username
         mikrotikProfile: plan.mikrotik_profile,
         planName: plan.name,

@@ -1,5 +1,6 @@
 import { createDynamicVirtualAccount } from "./flutterwave.js";
 import { provisionOrQueue } from "./fulfillPayment.js";
+import { sendMessage } from "./messaging.js";
 
 import {
   provisionHotspotUser,
@@ -50,7 +51,7 @@ async function upsertUser(db, phone, pushName = null) {
 
 async function getSession(db, phone) {
   const res = await db.query(
-    "SELECT state, plan_id, remote_jid, gift_target_user_id, pending_username, pending_password FROM whatsapp_sessions WHERE phone = $1",
+    "SELECT state, plan_id, remote_jid, gift_target_user_id, pending_username, pending_password FROM chat_sessions WHERE phone = $1",
     [phone],
   );
   return res.rows.length > 0
@@ -65,38 +66,35 @@ async function getSession(db, phone) {
       };
 }
 
-async function updateSession(
-  db,
-  phone,
-  state,
-  planId = null,
-  remoteJid = null,
-  giftTargetUserId = null,
-  pendingUsername = undefined,
-  pendingPassword = undefined,
-) {
+async function updateSession(db, phone, state, planId = null, platform = null, remoteId = null, giftTargetUserId = null, pendingUsername = undefined, pendingPassword = undefined) {
+  const isWhatsapp = platform === "whatsapp";
+  const isTelegram = platform === "telegram";
   await db.query(
     `
-        INSERT INTO whatsapp_sessions (phone, state, plan_id, remote_jid, gift_target_user_id, pending_username, pending_password)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO chat_sessions (phone, state, plan_id, remote_jid, telegram_chat_id, preferred_platform, gift_target_user_id, pending_username, pending_password)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (phone) DO UPDATE
         SET state               = EXCLUDED.state,
-            plan_id             = COALESCE(EXCLUDED.plan_id, whatsapp_sessions.plan_id),
-            remote_jid          = COALESCE(EXCLUDED.remote_jid, whatsapp_sessions.remote_jid),
+            plan_id             = COALESCE(EXCLUDED.plan_id, chat_sessions.plan_id),
+            remote_jid          = COALESCE(EXCLUDED.remote_jid, chat_sessions.remote_jid),
+            telegram_chat_id    = COALESCE(EXCLUDED.telegram_chat_id, chat_sessions.telegram_chat_id),
+            preferred_platform  = COALESCE(EXCLUDED.preferred_platform, chat_sessions.preferred_platform),
             gift_target_user_id = EXCLUDED.gift_target_user_id,
-            pending_username    = COALESCE(EXCLUDED.pending_username, whatsapp_sessions.pending_username),
-            pending_password    = COALESCE(EXCLUDED.pending_password, whatsapp_sessions.pending_password),
+            pending_username    = COALESCE(EXCLUDED.pending_username, chat_sessions.pending_username),
+            pending_password    = COALESCE(EXCLUDED.pending_password, chat_sessions.pending_password),
             last_updated        = CURRENT_TIMESTAMP
     `,
     [
       phone,
       state,
       planId,
-      remoteJid,
+      isWhatsapp ? remoteId : null,
+      isTelegram ? remoteId : null,
+      platform,
       giftTargetUserId,
       pendingUsername ?? null,
       pendingPassword ?? null,
-    ],
+    ]
   );
 }
 
@@ -148,7 +146,7 @@ async function getPaymentHistory(db, userId) {
     `
         SELECT p.amount, p.status, p.paid_at, p.created_at, pl.name AS plan_name
         FROM payments p
-        LEFT JOIN whatsapp_sessions ws ON ws.phone = (
+        LEFT JOIN chat_sessions ws ON ws.phone = (
             SELECT phone FROM users WHERE id = $1
         )
         LEFT JOIN plans pl ON pl.id = ws.plan_id
@@ -256,18 +254,12 @@ function fmt(date) {
 // MAIN HANDLER
 // ---------------------------------------------------------
 
-export async function handleMessage(
-  sock,
-  from,
-  pnJid,
-  text,
-  pushName = null,
-  db,
-) {
+export async function handleMessage(platform, remoteId, pnJid, text, pushName = null, db) {
   if (!text) return;
 
-  // Only handle PN (@s.whatsapp.net) and LID (@lid) — everything else was filtered upstream
-  if (!from.endsWith("@s.whatsapp.net") && !from.endsWith("@lid")) return;
+  // For WhatsApp, only handle PN (@s.whatsapp.net) and LID (@lid) JIDs.
+  // Telegram uses numeric chat IDs, so skip this check for it.
+  if (platform === "whatsapp" && !remoteId.endsWith("@s.whatsapp.net") && !remoteId.endsWith("@lid")) return;
 
   const message = text.trim();
   const msgLower = message.toLowerCase();
@@ -283,17 +275,17 @@ export async function handleMessage(
 
   // Admin gate — match against PN phone number, works regardless of LID/PN JID type
   if (ADMIN_PHONES.includes(pnPhone)) {
-    const handled = await handleAdminMessage(sock, from, text, db);
+    const handled = await handleAdminMessage(platform, remoteId, pnPhone, text, db);
     if (handled) return; // admin command consumed — skip normal user flow
   }
 
   // Universal reset — hi / hello / menu
   if (["hi", "hello", "menu"].includes(msgLower)) {
-    await updateSession(db, phone, "awaiting_service_selection", null, from);
+    await updateSession(db, phone, "awaiting_service_selection", null, platform, remoteId);
     const welcomeText = ADMIN_PHONES.includes(pnPhone)
       ? buildAdminWelcomeMessage(firstName)
       : buildWelcomeMessage(firstName);
-    await sock.sendMessage(from, { text: welcomeText });
+    await sendMessage(phone, welcomeText);
     return;
   }
 
@@ -306,10 +298,10 @@ export async function handleMessage(
         phone,
         "awaiting_device_selection",
         null,
-        from,
+        remoteId,
         session.gift_target_user_id,
       );
-      await sock.sendMessage(from, { text: buildDeviceMenu() });
+      await sendMessage(phone, buildDeviceMenu());
     } else if (
       session.state === "awaiting_device_selection" &&
       session.gift_target_user_id
@@ -320,14 +312,11 @@ export async function handleMessage(
         phone,
         "awaiting_gift_username",
         null,
-        from,
+        remoteId,
         null,
       );
-      await sock.sendMessage(from, {
-        text:
-          `👤 *Enter the hotspot username* of the person you're buying for:\n\n` +
-          `Reply *0* to go back.`,
-      });
+      await sendMessage(phone, `👤 *Enter the hotspot username* of the person you're buying for:\n\n` +
+          `Reply *0* to go back.`,);
     } else if (
       session.state === "awaiting_device_selection" &&
       !session.gift_target_user_id
@@ -338,16 +327,13 @@ export async function handleMessage(
         phone,
         "awaiting_purchase_target",
         null,
-        from,
+        remoteId,
         null,
       );
-      await sock.sendMessage(from, {
-        text:
-          `📡 *Who are you buying for?*\n\n` +
+      await sendMessage(phone, `📡 *Who are you buying for?*\n\n` +
           `1️⃣  Myself\n` +
           `2️⃣  Someone else\n\n` +
-          `Reply *1* or *2*, or *0* to go back.`,
-      });
+          `Reply *1* or *2*, or *0* to go back.`,);
     } else if (session.state === "awaiting_gift_username") {
       // Enter username → "Myself or Someone else?"
       await updateSession(
@@ -355,16 +341,13 @@ export async function handleMessage(
         phone,
         "awaiting_purchase_target",
         null,
-        from,
+        remoteId,
         null,
       );
-      await sock.sendMessage(from, {
-        text:
-          `📡 *Who are you buying for?*\n\n` +
+      await sendMessage(phone, `📡 *Who are you buying for?*\n\n` +
           `1️⃣  Myself\n` +
           `2️⃣  Someone else\n\n` +
-          `Reply *1* or *2*, or *0* to go back.`,
-      });
+          `Reply *1* or *2*, or *0* to go back.`,);
     } else {
       // Everywhere else (including awaiting_purchase_target) → main menu
       await updateSession(
@@ -372,10 +355,10 @@ export async function handleMessage(
         phone,
         "awaiting_service_selection",
         null,
-        from,
+        remoteId,
         null,
       );
-      await sock.sendMessage(from, { text: buildWelcomeMessage(firstName) });
+      await sendMessage(phone, buildWelcomeMessage(firstName));
     }
     return;
   }
@@ -394,16 +377,13 @@ export async function handleMessage(
             phone,
             "awaiting_purchase_target",
             null,
-            from,
+            remoteId,
             null,
           );
-          await sock.sendMessage(from, {
-            text:
-              `📡 *Who are you buying for?*\n\n` +
+          await sendMessage(phone, `📡 *Who are you buying for?*\n\n` +
               `1️⃣  Myself\n` +
               `2️⃣  Someone else\n\n` +
-              `Reply *1* or *2*, or *0* to go back.`,
-          });
+              `Reply *1* or *2*, or *0* to go back.`,);
           break;
         }
 
@@ -411,22 +391,18 @@ export async function handleMessage(
         case "2": {
           const sub = await getActiveSubscription(db, user.id);
           if (!sub) {
-            await sock.sendMessage(from, {
-              text:
-                `❌ *No Active Subscription*\n\n` +
+            await sendMessage(phone, `❌ *No Active Subscription*\n\n` +
                 `You need an active plan to change your password.\n\n` +
-                `Reply *1* to buy a plan or *HI* for the main menu.`,
-            });
+                `Reply *1* to buy a plan or *HI* for the main menu.`,);
             break;
           }
-          await updateSession(db, phone, "awaiting_new_password", null, from);
-          await sock.sendMessage(from, {
-            text:
+          await updateSession(db, phone, "awaiting_new_password", null, platform, remoteId);
+          await sendMessage(phone, 
               `🔑 *Change Password*\n\n` +
               `Current username: \`${user.hotspot_username || phone}\`\n\n` +
               `Enter your new *4-digit PIN* (numbers only):\n` +
               `Reply *0* to cancel.`,
-          });
+          );
           break;
         }
 
@@ -434,22 +410,18 @@ export async function handleMessage(
         case "3": {
           const sub = await getActiveSubscription(db, user.id);
           if (!sub) {
-            await sock.sendMessage(from, {
-              text:
-                `❌ *No Active Subscription*\n\n` +
+            await sendMessage(phone, `❌ *No Active Subscription*\n\n` +
                 `You need an active plan to change your username.\n\n` +
-                `Reply *1* to buy a plan or *HI* for the main menu.`,
-            });
+                `Reply *1* to buy a plan or *HI* for the main menu.`,);
             break;
           }
-          await updateSession(db, phone, "awaiting_new_username", null, from);
-          await sock.sendMessage(from, {
-            text:
+          await updateSession(db, phone, "awaiting_new_username", null, platform, remoteId);
+          await sendMessage(phone, 
               `👤 *Change Username*\n\n` +
               `Current username: \`${user.hotspot_username || phone}\`\n\n` +
               `Choose a new username (letters/numbers/underscore, 3–20 chars):\n` +
               `Reply *0* to cancel.`,
-          });
+          );
           break;
         }
 
@@ -469,12 +441,9 @@ export async function handleMessage(
           const queuedPlans = queuedRes.rows;
 
           if (!sub && !queuedPlans.length) {
-            await sock.sendMessage(from, {
-              text:
-                `📋 *No Active Subscription*\n\n` +
+            await sendMessage(phone, `📋 *No Active Subscription*\n\n` +
                 `You currently have no active data plan.\n\n` +
-                `Reply *1* to buy a plan or *HI* for the main menu.`,
-            });
+                `Reply *1* to buy a plan or *HI* for the main menu.`,);
           } else {
             let text = `📋 *Your Subscription*\n\n`;
 
@@ -514,7 +483,7 @@ export async function handleMessage(
 
             text += `\n\nReply *HI* for the main menu.`;
 
-            await sock.sendMessage(from, { text });
+            await sendMessage(phone, text);
           }
           await updateSession(db, phone, "start");
           break;
@@ -524,12 +493,9 @@ export async function handleMessage(
         case "5": {
           const history = await getSubscriptionHistory(db, user.id);
           if (!history.length) {
-            await sock.sendMessage(from, {
-              text:
-                `🕓 *Subscription History*\n\n` +
+            await sendMessage(phone, `🕓 *Subscription History*\n\n` +
                 `You have no subscription history yet.\n\n` +
-                `Reply *1* to buy your first plan or *HI* for the main menu.`,
-            });
+                `Reply *1* to buy your first plan or *HI* for the main menu.`,);
           } else {
             const lines = history
               .map((s, i) => {
@@ -541,12 +507,11 @@ export async function handleMessage(
               })
               .join("\n\n");
 
-            await sock.sendMessage(from, {
-              text:
+            await sendMessage(phone, 
                 `🕓 *Subscription History* (last 6)\n\n` +
                 `${lines}\n\n` +
                 `Reply *HI* for the main menu.`,
-            });
+            );
           }
           await updateSession(db, phone, "start");
           break;
@@ -565,12 +530,9 @@ export async function handleMessage(
           );
 
           if (!payments.rows.length) {
-            await sock.sendMessage(from, {
-              text:
-                `💳 *Payment History*\n\n` +
+            await sendMessage(phone, `💳 *Payment History*\n\n` +
                 `No payments found on your account yet.\n\n` +
-                `Reply *1* to buy a plan or *HI* for the main menu.`,
-            });
+                `Reply *1* to buy a plan or *HI* for the main menu.`,);
           } else {
             const lines = payments.rows
               .map((p, i) => {
@@ -589,12 +551,11 @@ export async function handleMessage(
               })
               .join("\n\n");
 
-            await sock.sendMessage(from, {
-              text:
+            await sendMessage(phone, 
                 `💳 *Payment History* (last 6)\n\n` +
                 `${lines}\n\n` +
                 `Reply *HI* for the main menu.`,
-            });
+            );
           }
           await updateSession(db, phone, "start");
           break;
@@ -602,24 +563,19 @@ export async function handleMessage(
 
         // ── 7. Contact Support ──────────────────────────────────
         case "7": {
-          await sock.sendMessage(from, {
-            text:
-              `📞 *Chulo Speednet Support*\n\n` +
+          await sendMessage(phone, `📞 *Chulo Speednet Support*\n\n` +
               `We're here to help! Reach us via:\n\n` +
               `💬 WhatsApp: This chat\n` +
               `📞 Phone Number: +2348112677404\n` +
               `⏰ Hours: *Mon–Sun, 8am–9pm*\n\n` +
               `Describe your issue and our team will respond shortly.\n\n` +
-              `Reply *HI* to return to the main menu.`,
-          });
+              `Reply *HI* to return to the main menu.`,);
           await updateSession(db, phone, "awaiting_support_message");
           break;
         }
 
         default:
-          await sock.sendMessage(from, {
-            text: `Please reply with a number between *1 and 7*, or send *HI* to see the menu again.`,
-          });
+          await sendMessage(phone, `Please reply with a number between *1 and 7*, or send *HI* to see the menu again.`,);
       }
       break;
     }
@@ -635,10 +591,10 @@ export async function handleMessage(
           phone,
           "awaiting_device_selection",
           null,
-          from,
+          remoteId,
           null,
         );
-        await sock.sendMessage(from, { text: buildDeviceMenu() });
+        await sendMessage(phone, buildDeviceMenu());
       } else if (message === "2") {
         // Buying for someone else — ask for their username
         await updateSession(
@@ -646,18 +602,13 @@ export async function handleMessage(
           phone,
           "awaiting_gift_username",
           null,
-          from,
+          remoteId,
           null,
         );
-        await sock.sendMessage(from, {
-          text:
-            `👤 *Enter the hotspot username* of the person you're buying for:\n\n` +
-            `Reply *0* to go back.`,
-        });
+        await sendMessage(phone, `👤 *Enter the hotspot username* of the person you're buying for:\n\n` +
+            `Reply *0* to go back.`,);
       } else {
-        await sock.sendMessage(from, {
-          text: `Please reply *1* for Myself or *2* for Someone else, or *0* to go back.`,
-        });
+        await sendMessage(phone, `Please reply *1* for Myself or *2* for Someone else, or *0* to go back.`,);
       }
       break;
     }
@@ -675,11 +626,10 @@ export async function handleMessage(
       );
 
       if (!targetRes.rows.length) {
-        await sock.sendMessage(from, {
-          text:
+        await sendMessage(phone, 
             `❌ No account found with username *${targetUsername}*.\n\n` +
             `Please check the username and try again, or reply *0* to go back.`,
-        });
+        );
         break;
       }
 
@@ -691,14 +641,13 @@ export async function handleMessage(
         phone,
         "awaiting_device_selection",
         null,
-        from,
+        remoteId,
         targetUser.id,
       );
-      await sock.sendMessage(from, {
-        text:
+      await sendMessage(phone, 
           `✅ Buying for *${targetUser.hotspot_username}*!\n\n` +
           buildDeviceMenu(),
-      });
+      );
       break;
     }
 
@@ -726,17 +675,13 @@ export async function handleMessage(
           phone,
           "awaiting_plan_selection",
           baseId,
-          from,
+          remoteId,
           session.gift_target_user_id,
         );
 
-        await sock.sendMessage(from, {
-          text: buildFilteredPlanMenu(res.rows, choice.label),
-        });
+        await sendMessage(phone, buildFilteredPlanMenu(res.rows, choice.label),);
       } else {
-        await sock.sendMessage(from, {
-          text: `Please reply *1* for Single, *2* for Two, or *3* for Three Devices, or *0* to go back.`,
-        });
+        await sendMessage(phone, `Please reply *1* for Single, *2* for Two, or *3* for Three Devices, or *0* to go back.`,);
       }
       break;
     }
@@ -745,12 +690,9 @@ export async function handleMessage(
     // SUPPORT MESSAGE — just acknowledge, no auto-routing
     // ──────────────────────────────────────────────────────────────────
     case "awaiting_support_message": {
-      await sock.sendMessage(from, {
-        text:
-          `✅ *Message received!*\n\n` +
+      await sendMessage(phone, `✅ *Message received!*\n\n` +
           `Our support team will get back to you shortly.\n\n` +
-          `Reply *HI* to return to the main menu.`,
-      });
+          `Reply *HI* to return to the main menu.`,);
 
       // Promise.all(ADMIN_PHONES.forEach(admin_phone => {
       //   sock.sendMessage()
@@ -767,9 +709,7 @@ export async function handleMessage(
       const position = parseInt(message, 10);
 
       if (isNaN(position) || position < 1 || position > 9) {
-        await sock.sendMessage(from, {
-          text: `Please reply with a plan number (1–5), or *0* to go back.`,
-        });
+        await sendMessage(phone, `Please reply with a plan number (1–5), or *0* to go back.`,);
         return;
       }
 
@@ -777,9 +717,7 @@ export async function handleMessage(
       const actualId = (session.plan_id || 1) + position - 1;
       const selectedPlan = await getPlan(db, actualId);
       if (!selectedPlan) {
-        await sock.sendMessage(from, {
-          text: `Invalid selection. Please reply with a number from the list, or *0* to go back.`,
-        });
+        await sendMessage(phone, `Invalid selection. Please reply with a number from the list, or *0* to go back.`,);
         return;
       }
 
@@ -799,11 +737,10 @@ export async function handleMessage(
           ).rows[0]
         : null;
 
-      await sock.sendMessage(from, {
-        text: isGift
+      await sendMessage(phone,  isGift
           ? `⏳ Generating payment account for *${giftTarget?.hotspot_username}*'s plan...`
           : `⏳ Generating your payment account for *${selectedPlan.name}*...`,
-      });
+      );
 
       try {
         const { txRef, accountNumber, accountName, bankName } =
@@ -827,7 +764,7 @@ export async function handleMessage(
           phone,
           "awaiting_payment",
           selectedPlan.id,
-          from,
+          remoteId,
           session.gift_target_user_id,
         );
 
@@ -842,8 +779,7 @@ export async function handleMessage(
             : `⚠️ *Important Notice*\nYou currently have an active plan. Your new *${selectedPlan.name}* plan will be queued and will automatically activate AFTER your current plan expires on *${expiryStr}*.⏳`;
         }
 
-        await sock.sendMessage(from, {
-          text:
+        await sendMessage(phone, 
             `✅ *Payment Details*\n\n` +
             (isGift
               ? `🎁 Gifting to: *${giftTarget?.hotspot_username}*\n`
@@ -856,12 +792,10 @@ export async function handleMessage(
             `⏱ This account expires in *1 hour*.\n` +
             `${noticeText}\n\n` +
             `Reply *HI* to cancel and start over.`,
-        });
+        );
       } catch (err) {
         console.error("Dynamic VA creation error:", err);
-        await sock.sendMessage(from, {
-          text: `❌ Couldn't generate a payment account right now. Please send *HI* to try again.`,
-        });
+        await sendMessage(phone, `❌ Couldn't generate a payment account right now. Please send *HI* to try again.`,);
       }
       break;
     }
@@ -878,12 +812,9 @@ export async function handleMessage(
       // Any message while waiting for payment → reassure the user.
       // We do NOT check Flutterwave manually here anymore — the webhook fires
       // automatically the moment the transfer clears, and it handles everything.
-      await sock.sendMessage(from, {
-        text:
-          `⏳ *We're waiting for your bank to confirm the transfer.*\n\n` +
+      await sendMessage(phone, `⏳ *We're waiting for your bank to confirm the transfer.*\n\n` +
           `As soon as it clears, your plan will be activated automatically and you'll get a confirmation message.\n\n` +
-          `You don't need to do anything else — just sit tight! 🙏`,
-      });
+          `You don't need to do anything else — just sit tight! 🙏`,);
       break;
     }
 
@@ -898,36 +829,32 @@ export async function handleMessage(
           phone,
           "awaiting_service_selection",
           null,
-          from,
+          remoteId,
         );
-        await sock.sendMessage(from, { text: buildWelcomeMessage(firstName) });
+        await sendMessage(phone, buildWelcomeMessage(firstName));
         break;
       }
 
       if (msgLower === "a") {
         // Change password
-        await updateSession(db, phone, "awaiting_new_password", null, from);
-        await sock.sendMessage(from, {
-          text:
+        await updateSession(db, phone, "awaiting_new_password", null, platform, remoteId);
+        await sendMessage(phone, 
             `🔑 *Change Password*\n\n` +
             `Current username: \`${user.hotspot_username || phone}\`\n\n` +
             `Please enter your new *4-digit PIN* (numbers only):\n` +
             `Reply *0* to cancel.`,
-        });
+        );
       } else if (msgLower === "b") {
         // Change username
-        await updateSession(db, phone, "awaiting_new_username", null, from);
-        await sock.sendMessage(from, {
-          text:
+        await updateSession(db, phone, "awaiting_new_username", null, platform, remoteId);
+        await sendMessage(phone, 
             `👤 *Change Username*\n\n` +
             `Current username: \`${user.hotspot_username || phone}\`\n\n` +
             `Choose a new username (letters/numbers/underscore, 3–20 chars):\n` +
             `Reply *0* to cancel.`,
-        });
+        );
       } else {
-        await sock.sendMessage(from, {
-          text: `Please reply *A* to change password, *B* to change username, or *0* to go back.`,
-        });
+        await sendMessage(phone, `Please reply *A* to change password, *B* to change username, or *0* to go back.`,);
       }
       break;
     }
@@ -938,19 +865,13 @@ export async function handleMessage(
     case "awaiting_hotspot_username": {
       const raw = sanitizeUsername(message);
       if (/^\d+$/.test(raw)) {
-        await sock.sendMessage(from, {
-          text:
-            `❌ Usernames cannot be numbers only.\n\n` +
-            `Please include at least one letter. Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again:`,
-        });
+        await sendMessage(phone, `❌ Usernames cannot be numbers only.\n\n` +
+            `Please include at least one letter. Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again:`,);
         break;
       }
       if (!isValidUsername(raw)) {
-        await sock.sendMessage(from, {
-          text:
-            `❌ Invalid username. Use only *letters, numbers, or underscores* (3–20 chars).\n\n` +
-            `Example: \`john\` or \`John_2\` or \`john20\`, etc.\n\nTry again:`,
-        });
+        await sendMessage(phone, `❌ Invalid username. Use only *letters, numbers, or underscores* (3–20 chars).\n\n` +
+            `Example: \`john\` or \`John_2\` or \`john20\`, etc.\n\nTry again:`,);
         break;
       }
 
@@ -960,9 +881,8 @@ export async function handleMessage(
         [raw, user.id],
       );
       if (checkRes.rowCount > 0) {
-        await sock.sendMessage(from, {
-          text: `❌ The username *${raw}* is already taken. Please choose a different username:`,
-        });
+        await sendMessage(phone,  `❌ The username *${raw}* is already taken. Please choose a different username:`,
+        );
         break;
       }
 
@@ -972,15 +892,14 @@ export async function handleMessage(
         phone,
         "awaiting_hotspot_username_confirm",
         session.plan_id,
-        from,
+        remoteId,
         null,
         raw,
       );
-      await sock.sendMessage(from, {
-        text:
+      await sendMessage(phone, 
           `👤 Are you sure you want *${raw}* as your username?\n\n` +
           `Reply *YES* to confirm or *NO* to choose a different one.`,
-      });
+      );
       break;
     }
 
@@ -989,9 +908,7 @@ export async function handleMessage(
     // ──────────────────────────────────────────────────────────────────
     case "awaiting_hotspot_password": {
       if (!isValidPassword(message)) {
-        await sock.sendMessage(from, {
-          text: `❌ PIN must be exactly *4 digits* (e.g. 1234). Please try again:`,
-        });
+        await sendMessage(phone, `❌ PIN must be exactly *4 digits* (e.g. 1234). Please try again:`,);
         break;
       }
 
@@ -1001,17 +918,16 @@ export async function handleMessage(
         phone,
         "awaiting_hotspot_password_confirm",
         session.plan_id,
-        from,
+        remoteId,
         null,
         undefined,
         message,
       );
-      await sock.sendMessage(from, {
-        text:
+      await sendMessage(phone, 
           `🔑 Are you sure you want *${message}* as your PIN?\n\n` +
           `Make sure it's something you'll remember — you'll need it to connect to the internet.\n\n` +
           `Reply *YES* to confirm or *NO* to choose a different PIN.`,
-      });
+      );
       break;
     }
 
@@ -1027,11 +943,9 @@ export async function handleMessage(
             phone,
             "awaiting_hotspot_username",
             session.plan_id,
-            from,
+            remoteId,
           );
-          await sock.sendMessage(from, {
-            text: `Something went wrong. Please enter your username again:`,
-          });
+          await sendMessage(phone, `Something went wrong. Please enter your username again:`,);
           break;
         }
         // Save confirmed username and proceed to password
@@ -1044,32 +958,26 @@ export async function handleMessage(
           phone,
           "awaiting_hotspot_password",
           session.plan_id,
-          from,
+          remoteId,
         );
-        await sock.sendMessage(from, {
-          text:
+        await sendMessage(phone, 
             `✅ Username *${pendingUser}* confirmed!\n\n` +
             `Now choose a *4-digit PIN* (numbers only):\n` +
             `Example: \`1234\`\n\nReply with your PIN:`,
-        });
+        );
       } else if (msgLower === "no") {
         await updateSession(
           db,
           phone,
           "awaiting_hotspot_username",
           session.plan_id,
-          from,
+          remoteId,
         );
-        await sock.sendMessage(from, {
-          text:
-            `No problem! Choose a different username\n\n` +
+        await sendMessage(phone, `No problem! Choose a different username\n\n` +
             `(Letters, numbers, or underscores · 3–20 chars)\n` +
-            `Example: \`john\` or \`john_2\` or \`john20\`, etc.`,
-        });
+            `Example: \`john\` or \`john_2\` or \`john20\`, etc.`,);
       } else {
-        await sock.sendMessage(from, {
-          text: `Please reply *YES* to confirm or *NO* to choose again.`,
-        });
+        await sendMessage(phone, `Please reply *YES* to confirm or *NO* to choose again.`,);
       }
       break;
     }
@@ -1087,11 +995,9 @@ export async function handleMessage(
             phone,
             "awaiting_hotspot_password",
             session.plan_id,
-            from,
+            remoteId,
           );
-          await sock.sendMessage(from, {
-            text: `Something went wrong. Please enter your PIN again:`,
-          });
+          await sendMessage(phone, `Something went wrong. Please enter your PIN again:`,);
           break;
         }
 
@@ -1105,10 +1011,9 @@ export async function handleMessage(
         ]);
 
         const plan = planRes.rows[0];
-        await updateSession(db, phone, "start", null, from);
-        await sock.sendMessage(from, {
-          text: `⏳ Setting up your account as *${username}*...`,
-        });
+        await updateSession(db, phone, "start", null, platform, remoteId);
+        await sendMessage(phone,  `⏳ Setting up your account as *${username}*...`,
+        );
 
         const subRes = await db.query(
           `SELECT expiry_time FROM subscriptions WHERE user_id = $1 AND status = 'active' ORDER BY id DESC LIMIT 1`,
@@ -1118,10 +1023,8 @@ export async function handleMessage(
         const expiryTime = subRes.rows[0]?.expiry_time || null;
         await provisionOrQueue(
           db,
-          sock,
           user,
           plan,
-          from,
           username,
           pass,
           false,
@@ -1133,15 +1036,11 @@ export async function handleMessage(
           phone,
           "awaiting_hotspot_password",
           session.plan_id,
-          from,
+          remoteId,
         );
-        await sock.sendMessage(from, {
-          text: `No problem! Choose a different *4-digit PIN* (numbers only):\nReply with your new PIN:`,
-        });
+        await sendMessage(phone, `No problem! Choose a different *4-digit PIN* (numbers only):\nReply with your new PIN:`,);
       } else {
-        await sock.sendMessage(from, {
-          text: `Please reply *YES* to confirm or *NO* to choose a different PIN.`,
-        });
+        await sendMessage(phone, `Please reply *YES* to confirm or *NO* to choose a different PIN.`,);
       }
       break;
     }
@@ -1152,25 +1051,18 @@ export async function handleMessage(
     case "awaiting_new_username": {
       if (msgLower === "0") {
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, {
-          text: `Cancelled. Reply *HI* for the main menu.`,
-        });
+        await sendMessage(phone, `Cancelled. Reply *HI* for the main menu.`,);
         break;
       }
 
       const raw = sanitizeUsername(message);
       if (/^\d+$/.test(raw)) {
-        await sock.sendMessage(from, {
-          text:
-            `❌ Usernames cannot be numbers only.\n\n` +
-            `Please include at least one letter. Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again or reply *0* to cancel:`,
-        });
+        await sendMessage(phone, `❌ Usernames cannot be numbers only.\n\n` +
+            `Please include at least one letter. Example: \`john\` or \`john_2\` or \`john20\`, etc.\n\nTry again or reply *0* to cancel:`,);
         break;
       }
       if (!isValidUsername(raw)) {
-        await sock.sendMessage(from, {
-          text: `❌ Invalid username. Letters/numbers/underscore only, 3–20 chars.\n\nTry again or reply *0* to cancel:`,
-        });
+        await sendMessage(phone, `❌ Invalid username. Letters/numbers/underscore only, 3–20 chars.\n\nTry again or reply *0* to cancel:`,);
         break;
       }
 
@@ -1180,17 +1072,14 @@ export async function handleMessage(
         [raw, user.id],
       );
       if (checkRes.rowCount > 0) {
-        await sock.sendMessage(from, {
-          text: `❌ The username *${raw}* is already taken. Please choose a different username or reply *0* to cancel:`,
-        });
+        await sendMessage(phone,  `❌ The username *${raw}* is already taken. Please choose a different username or reply *0* to cancel:`,
+        );
         break;
       }
 
       const sub = await getActiveSubscription(db, user.id);
       if (!sub) {
-        await sock.sendMessage(from, {
-          text: `❌ Your subscription has expired or is inactive. Please buy a new plan to change your username.`,
-        });
+        await sendMessage(phone, `❌ Your subscription has expired or is inactive. Please buy a new plan to change your username.`,);
         await updateSession(db, phone, "start");
         break;
       }
@@ -1200,16 +1089,15 @@ export async function handleMessage(
         phone,
         "awaiting_new_username_confirm",
         null,
-        from,
+        remoteId,
         null,
         raw,
       );
-      await sock.sendMessage(from, {
-        text:
+      await sendMessage(phone, 
           `👤 Are you sure you want to change your username to *${raw}*?\n\n` +
           `You'll need to use this new name every time you connect to the hotspot.\n\n` +
           `Reply *YES* to confirm or *NO* to choose a different one.`,
-      });
+      );
       break;
     }
 
@@ -1219,42 +1107,31 @@ export async function handleMessage(
     case "awaiting_new_username_confirm": {
       if (msgLower === "0") {
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, {
-          text: `Cancelled. Reply *HI* for the main menu.`,
-        });
+        await sendMessage(phone, `Cancelled. Reply *HI* for the main menu.`,);
         break;
       }
       if (msgLower !== "yes" && msgLower !== "no") {
-        await sock.sendMessage(from, {
-          text: `Please reply *YES* to confirm, *NO* to choose again, or *0* to cancel.`,
-        });
+        await sendMessage(phone, `Please reply *YES* to confirm, *NO* to choose again, or *0* to cancel.`,);
         break;
       }
       if (msgLower === "no") {
-        await updateSession(db, phone, "awaiting_new_username", null, from);
-        await sock.sendMessage(from, {
-          text:
-            `No problem! Choose a different username\n\n` +
+        await updateSession(db, phone, "awaiting_new_username", null, platform, remoteId);
+        await sendMessage(phone, `No problem! Choose a different username\n\n` +
             `(Letters, numbers, or underscores · 3–20 chars)\n` +
-            `Reply *0* to cancel.`,
-        });
+            `Reply *0* to cancel.`,);
         break;
       }
 
       // YES — apply the change
       const raw = session.pending_username;
       if (!raw) {
-        await updateSession(db, phone, "awaiting_new_username", null, from);
-        await sock.sendMessage(from, {
-          text: `Something went wrong. Please enter your username again:`,
-        });
+        await updateSession(db, phone, "awaiting_new_username", null, platform, remoteId);
+        await sendMessage(phone, `Something went wrong. Please enter your username again:`,);
         break;
       }
       const sub = await getActiveSubscription(db, user.id);
       if (!sub) {
-        await sock.sendMessage(from, {
-          text: `❌ Your subscription has expired or is inactive. Please buy a new plan to change your username.`,
-        });
+        await sendMessage(phone, `❌ Your subscription has expired or is inactive. Please buy a new plan to change your username.`,);
         await updateSession(db, phone, "start");
         break;
       }
@@ -1264,19 +1141,17 @@ export async function handleMessage(
           raw,
           user.id,
         ]);
-        await updateSession(db, phone, "awaiting_new_password", null, from);
-        await sock.sendMessage(from, {
-          text:
+        await updateSession(db, phone, "awaiting_new_password", null, platform, remoteId);
+        await sendMessage(phone, 
             `✅ Username *${raw}* confirmed!\n\n` +
             `You don't have a PIN set yet. Please choose a *4-digit PIN* (numbers only):\n\n` +
             `Reply *0* to cancel.`,
-        });
+        );
         break;
       }
       const oldUser = user.hotspot_username || phone;
-      await sock.sendMessage(from, {
-        text: `⏳ Updating your username to *${raw}*...`,
-      });
+      await sendMessage(phone,  `⏳ Updating your username to *${raw}*...`,
+      );
       try {
         const comment = buildMikrotikComment(
           user.phone,
@@ -1311,8 +1186,7 @@ export async function handleMessage(
           user.id,
         ]);
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, {
-          text:
+        await sendMessage(phone, 
             `✅ *Username Updated!*\n\n` +
             `🌐 *Your New Login Details*\n` +
             `Username: \`${raw}\`\n` +
@@ -1320,14 +1194,12 @@ export async function handleMessage(
             `Connect at: *http://10.5.50.1/login*\n\n` +
             `⚠️ *Action Required:* If you're currently connected, you've been logged out automatically. Please reconnect using your new username above.\n\n` +
             `Reply *HI* for the main menu.`,
-        });
+        );
         removeActiveSessions(oldUser);
       } catch (err) {
         console.error("Username change failed:", err.message);
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, {
-          text: `❌ Couldn't update your username right now. Please try again later or contact support (reply *6*).`,
-        });
+        await sendMessage(phone, `❌ Couldn't update your username right now. Please try again later or contact support (reply *6*).`,);
       }
       break;
     }
@@ -1338,16 +1210,12 @@ export async function handleMessage(
     case "awaiting_new_password": {
       if (msgLower === "0") {
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, {
-          text: `Cancelled. Reply *HI* for the main menu.`,
-        });
+        await sendMessage(phone, `Cancelled. Reply *HI* for the main menu.`,);
         break;
       }
 
       if (!isValidPassword(message)) {
-        await sock.sendMessage(from, {
-          text: `❌ PIN must be exactly *4 digits* (e.g. 5678). Try again or reply *0* to cancel:`,
-        });
+        await sendMessage(phone, `❌ PIN must be exactly *4 digits* (e.g. 5678). Try again or reply *0* to cancel:`,);
         break;
       }
 
@@ -1357,17 +1225,16 @@ export async function handleMessage(
         phone,
         "awaiting_new_password_confirm",
         null,
-        from,
+        remoteId,
         null,
         undefined,
         message,
       );
-      await sock.sendMessage(from, {
-        text:
+      await sendMessage(phone, 
           `🔑 Are you sure you want to change your PIN to *${message}*?\n\n` +
           `Make sure it's something easy for you to remember.\n\n` +
           `Reply *YES* to confirm or *NO* to choose a different PIN.`,
-      });
+      );
       break;
     }
 
@@ -1377,45 +1244,35 @@ export async function handleMessage(
     case "awaiting_new_password_confirm": {
       if (msgLower === "0") {
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, {
-          text: `Cancelled. Reply *HI* for the main menu.`,
-        });
+        await sendMessage(phone, `Cancelled. Reply *HI* for the main menu.`,);
         break;
       }
       if (msgLower !== "yes" && msgLower !== "no") {
-        await sock.sendMessage(from, {
-          text: `Please reply *YES* to confirm, *NO* to choose again, or *0* to cancel.`,
-        });
+        await sendMessage(phone, `Please reply *YES* to confirm, *NO* to choose again, or *0* to cancel.`,);
         break;
       }
       if (msgLower === "no") {
-        await updateSession(db, phone, "awaiting_new_password", null, from);
-        await sock.sendMessage(from, {
-          text: `No problem! Enter a different *4-digit PIN* (numbers only):\nReply *0* to cancel.`,
-        });
+        await updateSession(db, phone, "awaiting_new_password", null, platform, remoteId);
+        await sendMessage(phone, `No problem! Enter a different *4-digit PIN* (numbers only):\nReply *0* to cancel.`,);
         break;
       }
 
       // YES — apply the change
       const newPass = session.pending_password;
       if (!newPass) {
-        await updateSession(db, phone, "awaiting_new_password", null, from);
-        await sock.sendMessage(from, {
-          text: `Something went wrong. Please enter your PIN again:`,
-        });
+        await updateSession(db, phone, "awaiting_new_password", null, platform, remoteId);
+        await sendMessage(phone, `Something went wrong. Please enter your PIN again:`,);
         break;
       }
 
       const username = user.hotspot_username || phone;
       const sub = await getActiveSubscription(db, user.id);
       if (!sub) {
-        await sock.sendMessage(from, {
-          text: `❌ Your subscription has expired or is inactive. Please buy a new plan to change your password.`,
-        });
+        await sendMessage(phone, `❌ Your subscription has expired or is inactive. Please buy a new plan to change your password.`,);
         await updateSession(db, phone, "start");
         break;
       }
-      await sock.sendMessage(from, { text: `⏳ Updating your password...` });
+      await sendMessage(phone, `⏳ Updating your password...`);
       try {
         const comment = buildMikrotikComment(
           user.phone,
@@ -1433,8 +1290,7 @@ export async function handleMessage(
           user.id,
         ]);
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, {
-          text:
+        await sendMessage(phone, 
             `✅ *Password Updated!*\n\n` +
             `🌐 *Your Login Details*\n` +
             `Username: \`${username}\`\n` +
@@ -1442,22 +1298,20 @@ export async function handleMessage(
             `Connect at: *http://10.5.50.1*\n\n` +
             `⚠️ *Action Required:* If you're currently connected, you've been logged out automatically. Please reconnect using your new password above.\n\n` +
             `Reply *HI* for the main menu.`,
-        });
+        );
         removeActiveSessions(username);
       } catch (err) {
         console.error("Password change failed:", err.message);
         await updateSession(db, phone, "start");
-        await sock.sendMessage(from, {
-          text: `❌ Couldn't update your password right now. Please try again later or contact support (reply *6*).`,
-        });
+        await sendMessage(phone, `❌ Couldn't update your password right now. Please try again later or contact support (reply *6*).`,);
       }
       break;
     }
 
     // Catch-all — always safe to return to menu
     default:
-      await updateSession(db, phone, "awaiting_service_selection", null, from);
-      await sock.sendMessage(from, { text: buildWelcomeMessage(firstName) });
+      await updateSession(db, phone, "awaiting_service_selection", null, platform, remoteId);
+      await sendMessage(phone, buildWelcomeMessage(firstName));
       break;
   }
 }

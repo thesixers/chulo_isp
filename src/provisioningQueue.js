@@ -1,4 +1,5 @@
 import { provisionHotspotUser, buildMikrotikComment } from './mikrotik.js';
+import { sendMessage } from './messaging.js';
 
 // Retry backoff schedule (minutes per attempt index)
 const BACKOFF_MINUTES = [2, 5, 10, 15, 30, 60, 60, 60, 60, 60];
@@ -7,12 +8,12 @@ const BACKOFF_MINUTES = [2, 5, 10, 15, 30, 60, 60, 60, 60, 60];
  * Adds a failed provisioning job to the retry queue.
  * The scheduler will keep retrying until max_attempts is reached.
  */
-export async function enqueueProvisioning(db, { userId, remoteJid, phone, mikrotikProfile, planName, pin }) {
+export async function enqueueProvisioning(db, { userId, phone, mikrotikProfile, planName, pin }) {
     await db.query(`
         INSERT INTO provisioning_queue
-            (user_id, remote_jid, phone, mikrotik_profile, plan_name, pin, next_retry_at)
-        VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '2 minutes')
-    `, [userId, remoteJid, phone, mikrotikProfile, planName, pin]);
+            (user_id, phone, mikrotik_profile, plan_name, pin, next_retry_at)
+        VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '2 minutes')
+    `, [userId, phone, mikrotikProfile, planName, pin]);
 
     console.log(`📋 Provisioning queued for ${phone} — will retry in 2 minutes`);
 }
@@ -21,7 +22,7 @@ export async function enqueueProvisioning(db, { userId, remoteJid, phone, mikrot
  * Processes all due pending provisioning jobs.
  * Called by the scheduler in index.js every minute.
  */
-export async function processPendingQueue(db, sock) {
+export async function processPendingQueue(db) {
     const due = await db.query(`
         SELECT * FROM provisioning_queue
         WHERE status = 'pending' AND next_retry_at <= NOW()
@@ -34,11 +35,11 @@ export async function processPendingQueue(db, sock) {
     console.log(`🔄 Processing ${due.rows.length} queued provisioning job(s)...`);
 
     for (const job of due.rows) {
-        await processJob(db, sock, job);
+        await processJob(db, job);
     }
 }
 
-async function processJob(db, sock, job) {
+async function processJob(db, job) {
     const attempt = job.attempts + 1;
     console.log(`🔄 Provisioning attempt ${attempt}/${job.max_attempts} for ${job.phone}`);
 
@@ -70,16 +71,16 @@ async function processJob(db, sock, job) {
 
         console.log(`✅ Provisioning succeeded for ${job.phone} on attempt ${attempt}`);
 
-        await sock.sendMessage(job.remote_jid, {
-            text:
-                `🎉 *Your Chulo Speednet account is ready!*\n\n` +
-                `📡 Plan: *${job.plan_name}*\n\n` +
-                `🌐 *Login Details*\n` +
-                `Username: \`${job.phone}\`\n` +
-                `Password: \`${job.pin}\`\n\n` +
-                `Connect at: *http://10.5.50.1/*\n\n` +
-                `Welcome to Chulo Speednet! 🛰️`,
-        });
+        await sendMessage(job.phone,
+            `🎉 *Your Chulo Speednet account is ready!*\n\n` +
+            `📡 Plan: *${job.plan_name}*\n\n` +
+            `🌐 *Login Details*\n` +
+            `Username: \`${job.phone}\`\n` +
+            `Password: \`${job.pin}\`\n\n` +
+            `Connect at: *http://10.5.50.1/*\n\n` +
+            `Welcome to Chulo Speednet! 🛰️`,
+            { sendToBoth: true }
+        );
 
     } catch (err) {
         console.error(`❌ Provisioning attempt ${attempt} failed for ${job.phone}:`, err.message);
@@ -92,15 +93,15 @@ async function processJob(db, sock, job) {
 
             console.error(`🚫 Provisioning permanently failed for ${job.phone} after ${attempt} attempts`);
 
-            await sock.sendMessage(job.remote_jid, {
-                text:
-                    `⚠️ *Account Setup Delayed*\n\n` +
-                    `We've been unable to automatically set up your hotspot login after multiple attempts.\n\n` +
-                    `Your payment is confirmed and your subscription is active.\n\n` +
-                    `Please contact our support team and we'll set up your credentials manually:\n` +
-                    `Reply *6* from the main menu or send *HI* to get started.\n\n` +
-                    `We apologize for the inconvenience! 🙏`,
-            });
+            await sendMessage(job.phone,
+                `⚠️ *Account Setup Delayed*\n\n` +
+                `We've been unable to automatically set up your hotspot login after multiple attempts.\n\n` +
+                `Your payment is confirmed and your subscription is active.\n\n` +
+                `Please contact our support team and we'll set up your credentials manually:\n` +
+                `Reply *6* from the main menu or send *HI* to get started.\n\n` +
+                `We apologize for the inconvenience! 🙏`,
+                { sendToBoth: true }
+            );
         } else {
             // Schedule next retry with backoff
             const backoffMins = BACKOFF_MINUTES[attempt] ?? 60;

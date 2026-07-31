@@ -4,6 +4,7 @@ import {
   provisionHotspotUser,
   buildMikrotikComment,
 } from "./mikrotik.js";
+import { sendMessage } from "./messaging.js";
 
 const fmt = (d) =>
   new Date(d).toLocaleDateString("en-GB", {
@@ -16,22 +17,21 @@ const fmt = (d) =>
 // Job A — Remove expired subscribers from MikroTik every 30 minutes
 // (only removes from the router; keeps DB record for history)
 // ─────────────────────────────────────────────────────────────────────────────
-async function cleanupExpiredUsers(db, getSock) {
+async function cleanupExpiredUsers(db) {
   let removed = 0,
     failed = 0;
   try {
     const res = await db.query(`
-            SELECT s.id AS sub_id, u.hotspot_username, u.id AS user_id, ws.remote_jid
+            SELECT s.id AS sub_id, u.hotspot_username, u.id AS user_id, u.phone
             FROM subscriptions s
             JOIN users u ON u.id = s.user_id
-            LEFT JOIN whatsapp_sessions ws ON ws.phone = u.phone
+            JOIN chat_sessions ws ON ws.phone = u.phone
             WHERE s.status = 'active'
               AND s.expiry_time < NOW()
               AND u.hotspot_username IS NOT NULL
             ORDER BY s.id
+            FOR UPDATE OF s SKIP LOCKED
         `);
-
-    const sock = getSock();
 
     for (const [i, row] of res.rows.entries()) {
       // Check if user has a newly activated subscription (from queue)
@@ -45,18 +45,14 @@ async function cleanupExpiredUsers(db, getSock) {
 
       if (activeCheck.rowCount === 0) {
         try {
-
-          setTimeout(async () => {
-            if (sock && row.remote_jid) {
-              await sock.sendMessage(row.remote_jid, {
-                text:
-                  `🧹 *Your Subscription Has Expired*\n\n` +
-                  `Your MikroTik profile has been removed from the router as your plan has expired.\n\n` +
-                  `🎁 *Renew now to continue enjoying our service!*\n\n` +
-                  `Reply *1* to renew or *HI* for the main menu.`,
-              });
-            }
-          }, 1000 + (i * 4000));
+          // Send to BOTH WhatsApp and Telegram if applicable
+          await sendMessage(row.phone,
+            `🧹 *Your Subscription Has Expired*\n\n` +
+            `Your MikroTik profile has been removed from the router as your plan has expired.\n\n` +
+            `🎁 *Renew now to continue enjoying our service!*\n\n` +
+            `Reply *1* to renew or *HI* for the main menu.`,
+            { sendToBoth: true }
+          );
 
           // Await Mikrotik removal synchronously so we don't accidentally update the DB if it fails
           await removeActiveSessions(row.hotspot_username);
@@ -106,30 +102,28 @@ async function cleanupExpiredUsers(db, getSock) {
 //   3-day plans              → alert at 1 day remaining
 //   1-day plans              → no alert
 // ─────────────────────────────────────────────────────────────────────────────
-async function sendExpiryAlerts(db, getSock) {
+async function sendExpiryAlerts(db) {
   try {
     const res = await db.query(`
             SELECT s.id, s.expiry_time, s.alert_sent,
                    pl.duration_days, pl.name AS plan_name,
-                   u.phone, ws.remote_jid
+                   u.phone
             FROM subscriptions s
             JOIN users u   ON u.id  = s.user_id
             JOIN plans pl  ON pl.id = s.plan_id
-            LEFT JOIN whatsapp_sessions ws ON ws.phone = u.phone
+            JOIN chat_sessions ws ON ws.phone = u.phone
             WHERE s.status = 'active'
               AND s.expiry_time > NOW()
               AND s.alert_sent = false
-              AND ws.remote_jid IS NOT NULL
+              AND (ws.remote_jid IS NOT NULL OR ws.telegram_chat_id IS NOT NULL)
               AND NOT EXISTS (
                   SELECT 1 FROM subscriptions sq
                   WHERE sq.user_id = s.user_id
                   AND sq.status = 'queued'
               )
             ORDER BY s.id
+            FOR UPDATE OF s SKIP LOCKED
         `);
-
-    const sock = getSock();
-    if (!sock) return; // WhatsApp not connected yet
 
     for (const [i, sub] of res.rows.entries()) {
       const hoursLeft =
@@ -167,9 +161,7 @@ async function sendExpiryAlerts(db, getSock) {
 
       if (message) {
         try {
-          setTimeout(async () => {
-            await sock.sendMessage(sub.remote_jid, { text: message });
-          }, 2000 + (i * 4000));
+          await sendMessage(sub.phone, message, { sendToBoth: true });
           await db.query(
             `UPDATE subscriptions SET alert_sent = true WHERE id = $1`,
             [sub.id],
@@ -191,23 +183,22 @@ async function sendExpiryAlerts(db, getSock) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Job C — Activate queued subscriptions (Runs every minute)
 // ─────────────────────────────────────────────────────────────────────────────
-async function activateQueuedUsers(db, getSock) {
+async function activateQueuedUsers(db) {
   try {
     const res = await db.query(`
             SELECT s.id AS sub_id, s.expiry_time, u.hotspot_username, u.hotspot_password, u.phone,
-                   p.mikrotik_profile, p.duration_days, p.name AS plan_name, ws.remote_jid
+                   p.mikrotik_profile, p.duration_days, p.name AS plan_name
             FROM subscriptions s
             JOIN users u ON u.id = s.user_id
             JOIN plans p ON p.id = s.plan_id
-            LEFT JOIN whatsapp_sessions ws ON ws.phone = u.phone
+            JOIN chat_sessions ws ON ws.phone = u.phone
             WHERE s.status = 'queued'
               AND s.start_time <= NOW()
             ORDER BY s.id
+            FOR UPDATE OF s SKIP LOCKED
         `);
 
     if (res.rows.length === 0) return;
-
-    const sock = getSock();
 
     for (const [i, row] of res.rows.entries()) {
       if (!row.hotspot_username || !row.hotspot_password) continue;
@@ -235,17 +226,13 @@ async function activateQueuedUsers(db, getSock) {
           `✅ Scheduler: Activated queued plan for '${row.hotspot_username}'`,
         );
 
-        // Notify user on WhatsApp
-        if (sock && row.remote_jid) {
-          setTimeout(async () => {
-            await sock.sendMessage(row.remote_jid, {
-              text:
-                `🎉 *Your Queued Plan is Active!*\n\n` +
-                `Your old plan has expired and your new *${row.plan_name}* plan is now running.\n` +
-                `Your MikroTik profile has been updated automatically! 🛰️`,
-            });
-          }, 2000 + (i * 4000));
-        }
+        // Notify user via new messaging router
+        await sendMessage(row.phone,
+          `🎉 *Your Queued Plan is Active!*\n\n` +
+          `Your old plan has expired and your new *${row.plan_name}* plan is now running.\n` +
+          `Your MikroTik profile has been updated automatically! 🛰️`,
+          { sendToBoth: true }
+        );
       } catch (err) {
         console.error(
           `❌ Scheduler: Failed to activate queued plan for '${row.hotspot_username}':`,
@@ -260,29 +247,71 @@ async function activateQueuedUsers(db, getSock) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Start all scheduled jobs
-// getSock() should return the current live Baileys socket (updated on reconnect)
+// Job D — Retry sending failed offline messages (Runs every 5 minutes)
 // ─────────────────────────────────────────────────────────────────────────────
-export function startScheduler(db, getSock) {
+async function retryMessageQueue(db) {
+  try {
+    const res = await db.query(`
+        SELECT id, phone, message_text, send_to_both
+        FROM message_queue
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+        LIMIT 50
+    `);
+
+    if (res.rows.length === 0) return;
+
+    for (const msg of res.rows) {
+      // Check if a chat session exists. If not, this is an orphaned message (e.g. database reset/reseed)
+      const sessionRes = await db.query(`SELECT 1 FROM chat_sessions WHERE phone = $1`, [msg.phone]);
+      if (sessionRes.rows.length === 0) {
+        console.log(`🗑️ Deleting orphaned queued message for ${msg.phone} (no chat session exists)`);
+        await db.query(`DELETE FROM message_queue WHERE id = $1`, [msg.id]);
+        continue;
+      }
+
+      console.log(`🔄 Retrying queued message for ${msg.phone}...`);
+      
+      // Update attempts
+      await db.query(`UPDATE message_queue SET attempts = attempts + 1, last_attempted_at = CURRENT_TIMESTAMP WHERE id = $1`, [msg.id]);
+      
+      // Call sendMessage
+      const success = await sendMessage(msg.phone, msg.message_text, { sendToBoth: msg.send_to_both });
+      if (success) {
+        await db.query(`DELETE FROM message_queue WHERE id = $1`, [msg.id]);
+        console.log(`✅ Successfully sent queued message to ${msg.phone}`);
+      } else {
+        // Will be retried on next tick
+        console.log(`❌ Still failed to send queued message to ${msg.phone}`);
+      }
+    }
+  } catch (err) {
+    console.error("Scheduler: retryMessageQueue error:", err.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Start all scheduled jobs
+// ─────────────────────────────────────────────────────────────────────────────
+export function startScheduler(db) {
   console.log("⏰ Scheduler started");
 
   // Job A: cleanup every 30 minutes
-  setInterval(() => cleanupExpiredUsers(db, getSock), 30 * 60 * 1000);
+  setInterval(() => cleanupExpiredUsers(db), 30 * 60 * 1000);
 
   // Job B: expiry alerts every 1 hour
-  setInterval(() => sendExpiryAlerts(db, getSock), 60 * 60 * 1000);
+  setInterval(() => sendExpiryAlerts(db), 60 * 60 * 1000);
 
   // Job C: activate queued plans every 1 minute
-  setInterval(() => activateQueuedUsers(db, getSock), 60 * 1000);
+  setInterval(() => activateQueuedUsers(db), 60 * 1000);
+  
+  // Job D: retry failed messages every 5 minutes
+  setInterval(() => retryMessageQueue(db), 5 * 60 * 1000);
 
-  // Run immediately on startup too, but sequentially to prevent DB deadlocks
-  (async () => {
-    try {
-      await cleanupExpiredUsers(db, getSock);
-      await sendExpiryAlerts(db, getSock);
-      await activateQueuedUsers(db, getSock);
-    } catch (err) {
-      console.error("Startup scheduler error:", err);
-    }
-  })();
+  // Run immediately on startup too, but staggered to prevent DB deadlocks
+  // Small delays ensure they don't race on the same subscription rows at boot.
+  setTimeout(() => cleanupExpiredUsers(db), 2_000);
+  setTimeout(() => sendExpiryAlerts(db), 5_000);
+  setTimeout(() => activateQueuedUsers(db), 8_000);
+  setTimeout(() => retryMessageQueue(db), 11_000);
 }
