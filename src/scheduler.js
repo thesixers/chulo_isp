@@ -276,7 +276,10 @@ async function retryMessageQueue(db) {
       await db.query(`UPDATE message_queue SET attempts = attempts + 1, last_attempted_at = CURRENT_TIMESTAMP WHERE id = $1`, [msg.id]);
       
       // Call sendMessage
-      const success = await sendMessage(msg.phone, msg.message_text, { sendToBoth: msg.send_to_both });
+      const success = await sendMessage(msg.phone, msg.message_text, { 
+        sendToBoth: msg.send_to_both,
+        queueOnFailure: false
+      });
       if (success) {
         await db.query(`DELETE FROM message_queue WHERE id = $1`, [msg.id]);
         console.log(`✅ Successfully sent queued message to ${msg.phone}`);

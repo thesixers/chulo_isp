@@ -174,7 +174,8 @@ function buildWelcomeMessage(name = "there") {
     `5️⃣  🕓 Subscription History\n` +
     `6️⃣  💳 Payment History\n` +
     `7️⃣  📞 Contact Support\n\n` +
-    `Reply with a number (1–7).`
+    `Reply with a number (1–7).\n\n` +
+    `✈️ Prefer Telegram? Chat with us at https://t.me/chulo\\_speednet\\_bot`
   );
 }
 
@@ -191,7 +192,8 @@ function buildAdminWelcomeMessage(name = "Admin") {
     `7️⃣  📞 Contact Support\n\n` +
     `*🛠️ Admin Commands:*\n` +
     `Type *!help* to see all admin commands.\n\n` +
-    `Reply with a number (1–7) or an admin command.`
+    `Reply with a number (1–7) or an admin command.\n\n` +
+    `✈️ Prefer Telegram? Chat with us at https://t.me/chulo\\_speednet\\_bot`
   );
 }
 

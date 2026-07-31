@@ -149,7 +149,9 @@ export async function sendMessage(phone, text, options = {}) {
   }
 
   if (!waSuccess && !tgSuccess) {
-    await queueMessage(phone, text, false);
+    if (options.queueOnFailure !== false) {
+      await queueMessage(phone, text, sendToBoth);
+    }
     return false;
   }
 
