@@ -536,8 +536,8 @@ export async function handleAdminMessage(platform, remoteId, from, text, db) {
       LEFT JOIN payments pay
              ON pay.user_id = s.user_id
             AND DATE((pay.paid_at  AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Lagos') = $1::date
-      WHERE DATE((s.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Lagos') = $1::date
-      ORDER BY s.created_at DESC
+      WHERE DATE((s.start_time AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Lagos') = $1::date
+      ORDER BY s.start_time DESC
     `, [targetDate]);
 
     if (dailyRes.rows.length === 0) {
