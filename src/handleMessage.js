@@ -307,6 +307,7 @@ export async function handleMessage(platform, remoteId, pnJid, text, pushName = 
         phone,
         "awaiting_device_selection",
         null,
+        platform,
         remoteId,
         session.gift_target_user_id,
       );
@@ -650,6 +651,7 @@ export async function handleMessage(platform, remoteId, pnJid, text, pushName = 
         phone,
         "awaiting_device_selection",
         null,
+        platform,
         remoteId,
         targetUser.id,
       );
@@ -684,6 +686,7 @@ export async function handleMessage(platform, remoteId, pnJid, text, pushName = 
           phone,
           "awaiting_plan_selection",
           baseId,
+          platform,
           remoteId,
           session.gift_target_user_id,
         );
@@ -775,6 +778,7 @@ export async function handleMessage(platform, remoteId, pnJid, text, pushName = 
           phone,
           "awaiting_payment",
           selectedPlan.id,
+          platform,
           remoteId,
           session.gift_target_user_id,
         );
