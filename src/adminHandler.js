@@ -940,12 +940,12 @@ async function handleAdminSession(from, text, db, session) {
               `⏳ *Queued* — activates on *${new Date(activeSub.expiry_time).toDateString()}* when your current plan expires.` +
               (bonusDays > 0
                 ? `\n🎁 *+${bonusDays} free day${bonusDays > 1 ? "s" : ""} added!* 🎉`
-                : ""),);
+                : ""), { sendToBoth: true });
         } else {
           await sendMessage(targetUser.phone, `✅ *Your plan has been activated!* (by Admin)\n\n` +
               `📡 Plan: *${plan.name}*\n` +
               `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
-              `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`,);
+              `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`, { sendToBoth: true });
         }
       } catch (err) {
         console.error(
@@ -1067,7 +1067,7 @@ async function handleAdminSession(from, text, db, session) {
         // sendMessage() routes by phone and handles JID lookup internally
         await sendMessage(targetUser.phone, sub.status === "active"
               ? `ℹ️ *Notice from Chulo Speednet*\n\nYour *${sub.plan_name}* plan has been removed by an admin.\n\nIf you believe this is a mistake, please contact support.`
-              : `ℹ️ *Notice from Chulo Speednet*\n\nYour queued *${sub.plan_name}* plan has been cancelled by an admin.\n\nIf you believe this is a mistake, please contact support.`,);
+              : `ℹ️ *Notice from Chulo Speednet*\n\nYour queued *${sub.plan_name}* plan has been cancelled by an admin.\n\nIf you believe this is a mistake, please contact support.`, { sendToBoth: true });
       } catch (notifyErr) {
         console.error(
           "Failed to notify user after !delsub:",
@@ -1349,7 +1349,7 @@ async function handleAdminSession(from, text, db, session) {
           `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
           `MikroTik provisioned ✅`,);
 
-      // 7. Notify customer on WhatsApp
+      // 7. Notify customer on both platforms
       // sendMessage() routes by phone number and handles JID lookup internally
       try {
         await sendMessage(phone, `👋 *Welcome to Chulo Speednet!*\n\n` +
@@ -1360,7 +1360,7 @@ async function handleAdminSession(from, text, db, session) {
             `📡 Plan: *${plan.name}*\n` +
             `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
             `Connect at: *http://10.5.50.1*\n\n` +
-            `Send *HI* anytime to manage your account. Enjoy! 🛰️`,);
+            `Send *HI* anytime to manage your account. Enjoy! 🛰️`, { sendToBoth: true });
       } catch (notifyErr) {
         console.error("Failed to notify new user:", notifyErr.message);
         await sendMessage(from, `⚠️ Account created but couldn't send WhatsApp notification to +${phone}. Share the credentials manually.`,);

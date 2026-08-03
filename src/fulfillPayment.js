@@ -175,7 +175,7 @@ export async function fulfillPayment(db, user, amountPaid) {
           (bonusDays > 0
             ? `\n🎁 *+${bonusDays} free day${bonusDays > 1 ? "s" : ""} added!* 🎉`
             : "")
-      );
+      , { sendToBoth: true });
       // Notify recipient (User B) if this is a gift
       if (isGift) {
         await sendMessage(targetUser.phone,
@@ -183,7 +183,7 @@ export async function fulfillPayment(db, user, amountPaid) {
             `📡 Plan: *${plan.name}*\n` +
             `⏳ *Queued* — activates on *${new Date(activeSub.expiry_time).toDateString()}* when your current plan expires.\n\n` +
             `Reply *HI* to view your subscription.`
-        );
+        , { sendToBoth: true });
       }
     } else {
       // Fresh activation — notify payer
@@ -193,7 +193,7 @@ export async function fulfillPayment(db, user, amountPaid) {
           (isGift ? `🎁 Gifted to: *${targetUser.hotspot_username}*\n` : "") +
           `📅 Expires: *${newExpiry.toDateString()}*` +
           (!isGift ? promoTip(plan.duration_days) : "")
-      );
+      , { sendToBoth: true });
       // Notify recipient (User B) if this is a gift
       if (isGift) {
         await sendMessage(targetUser.phone,
@@ -201,7 +201,7 @@ export async function fulfillPayment(db, user, amountPaid) {
             `📡 Plan: *${plan.name}*\n` +
             `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
             `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`
-        );
+        , { sendToBoth: true });
       }
     }
   } catch (msgErr) {
@@ -311,7 +311,7 @@ export async function provisionOrQueue(
             `Connect at: *http://10.5.50.1*\n` +
             `Enjoy your internet! 🛰️` +
             promoTip(plan.duration_days)
-        );
+        , { sendToBoth: true });
       } else {
         await sendMessage(user.phone,
             `🎉 *Your Chulo Speednet account is ready!*\n\n` +
@@ -321,7 +321,7 @@ export async function provisionOrQueue(
             `Connect at: *http://10.5.50.1/*\n\n` +
             `Welcome to Chulo Speednet! 🛰️` +
             promoTip(plan.duration_days)
-        );
+        , { sendToBoth: true });
       }
     }
   } catch (err) {
