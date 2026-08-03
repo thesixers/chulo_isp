@@ -426,10 +426,6 @@ app.post("/webhook/flutterwave", async (req, res) => {
         const user = paymentRes.rows[0];
 
         if (user) {
-          if (!globalSock && !telegramBot) {
-            req.log.error("Bots are not connected yet");
-            return;
-          }
           await fulfillPayment(db, user, amountPaid);
         } else {
           req.log.warn(
@@ -464,10 +460,6 @@ app.post("/webhook/flutterwave", async (req, res) => {
         const user = paymentRes.rows[0];
 
         if (user) {
-          if (!globalSock && !telegramBot) {
-            req.log.error("Bots are not connected yet");
-            return;
-          }
           await fulfillPayment(db, user, amountPaid);
 
         } else {

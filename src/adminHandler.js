@@ -931,25 +931,18 @@ async function handleAdminSession(from, text, db, session) {
             ? `⏳ Plan was queued to start on ${new Date(activeSub.expiry_time).toDateString()}.`
             : `📡 Plan is now active.`),);
 
-      // 4. Notify User
-      const targetJidRes = await db.query(
-        `SELECT remote_jid FROM chat_sessions WHERE phone = $1`,
-        [targetUser.phone],
-      );
-      const targetJid =
-        targetJidRes.rows[0]?.remote_jid ||
-        `${targetUser.phone}@s.whatsapp.net`;
-
+      // 4. Notify User (sendMessage routes by phone, handles JID lookup internally)
+      // targetJid is kept for reference but sendMessage uses the phone number
       try {
         if (isRenewal) {
-          await sendMessage(targetPhone, `✅ *Your plan has been activated!* (by Admin)\n\n` +
+          await sendMessage(targetUser.phone, `✅ *Your plan has been activated!* (by Admin)\n\n` +
               `📡 Plan: *${plan.name}*\n` +
               `⏳ *Queued* — activates on *${new Date(activeSub.expiry_time).toDateString()}* when your current plan expires.` +
               (bonusDays > 0
                 ? `\n🎁 *+${bonusDays} free day${bonusDays > 1 ? "s" : ""} added!* 🎉`
                 : ""),);
         } else {
-          await sendMessage(targetPhone, `✅ *Your plan has been activated!* (by Admin)\n\n` +
+          await sendMessage(targetUser.phone, `✅ *Your plan has been activated!* (by Admin)\n\n` +
               `📡 Plan: *${plan.name}*\n` +
               `📅 Expires: *${newExpiry.toDateString()}*\n\n` +
               `Your plan is now active — connect at *http://10.5.50.1* and enjoy! 🛰️`,);
@@ -1071,14 +1064,8 @@ async function handleAdminSession(from, text, db, session) {
 
       // 4. Notify user
       try {
-        const targetJidRes = await db.query(
-          `SELECT remote_jid FROM chat_sessions WHERE phone = $1`,
-          [targetUser.phone],
-        );
-        const targetJid =
-          targetJidRes.rows[0]?.remote_jid ||
-          `${targetUser.phone}@s.whatsapp.net`;
-        await sendMessage(targetPhone, sub.status === "active"
+        // sendMessage() routes by phone and handles JID lookup internally
+        await sendMessage(targetUser.phone, sub.status === "active"
               ? `ℹ️ *Notice from Chulo Speednet*\n\nYour *${sub.plan_name}* plan has been removed by an admin.\n\nIf you believe this is a mistake, please contact support.`
               : `ℹ️ *Notice from Chulo Speednet*\n\nYour queued *${sub.plan_name}* plan has been cancelled by an admin.\n\nIf you believe this is a mistake, please contact support.`,);
       } catch (notifyErr) {
@@ -1363,8 +1350,9 @@ async function handleAdminSession(from, text, db, session) {
           `MikroTik provisioned ✅`,);
 
       // 7. Notify customer on WhatsApp
+      // sendMessage() routes by phone number and handles JID lookup internally
       try {
-        await sendMessage(targetPhone, `👋 *Welcome to Chulo Speednet!*\n\n` +
+        await sendMessage(phone, `👋 *Welcome to Chulo Speednet!*\n\n` +
             `Your account has been set up by our team.\n\n` +
             `🌐 *Your Login Details*\n` +
             `Username: \`${username}\`\n` +

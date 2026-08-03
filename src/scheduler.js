@@ -25,7 +25,7 @@ async function cleanupExpiredUsers(db) {
             SELECT s.id AS sub_id, u.hotspot_username, u.id AS user_id, u.phone
             FROM subscriptions s
             JOIN users u ON u.id = s.user_id
-            JOIN chat_sessions ws ON ws.phone = u.phone
+            LEFT JOIN chat_sessions ws ON ws.phone = u.phone
             WHERE s.status = 'active'
               AND s.expiry_time < NOW()
               AND u.hotspot_username IS NOT NULL
@@ -111,7 +111,7 @@ async function sendExpiryAlerts(db) {
             FROM subscriptions s
             JOIN users u   ON u.id  = s.user_id
             JOIN plans pl  ON pl.id = s.plan_id
-            JOIN chat_sessions ws ON ws.phone = u.phone
+            LEFT JOIN chat_sessions ws ON ws.phone = u.phone
             WHERE s.status = 'active'
               AND s.expiry_time > NOW()
               AND s.alert_sent = false
@@ -191,7 +191,6 @@ async function activateQueuedUsers(db) {
             FROM subscriptions s
             JOIN users u ON u.id = s.user_id
             JOIN plans p ON p.id = s.plan_id
-            JOIN chat_sessions ws ON ws.phone = u.phone
             WHERE s.status = 'queued'
               AND s.start_time <= NOW()
             ORDER BY s.id

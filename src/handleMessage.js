@@ -723,7 +723,9 @@ export async function handleMessage(platform, remoteId, pnJid, text, pushName = 
       }
 
       // session.plan_id holds the base DB id for the chosen device tier
-      const actualId = (session.plan_id || 1) + position - 1;
+      // NOTE: plan_id from the DB is a string — parseInt() is required to avoid
+      // string concatenation ("5" + 1 = "51") which crashes pg with pg_strtoint32.
+      const actualId = (parseInt(session.plan_id, 10) || 1) + position - 1;
       const selectedPlan = await getPlan(db, actualId);
       if (!selectedPlan) {
         await sendMessage(phone, `Invalid selection. Please reply with a number from the list, or *0* to go back.`,);
