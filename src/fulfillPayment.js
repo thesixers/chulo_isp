@@ -17,6 +17,7 @@ export async function fulfillPayment(db, user, amountPaid) {
     `SELECT plan_id, gift_target_user_id FROM chat_sessions WHERE phone = $1`,
     [user.phone],
   );
+
   const session = sessionRes.rows[0];
   const giftTargetUserId = session?.gift_target_user_id || null;
 
@@ -161,6 +162,7 @@ export async function fulfillPayment(db, user, amountPaid) {
   console.log(
     `📤 Sending payment confirmation to ${user.phone} (isGift=${isGift}, isRenewal=${isRenewal})`,
   );
+  
   try {
     if (isRenewal) {
       // Plan is queued — notify payer

@@ -1195,6 +1195,8 @@ export async function handleMessage(platform, remoteId, pnJid, text, pushName = 
           await apiConn.write("/ip/hotspot/user/remove", [
             `=numbers=${oldUser}`,
           ]);
+
+          
         } catch (_) {
           /* ignore */
         }
